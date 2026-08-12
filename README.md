@@ -212,3 +212,18 @@ node -e "import('./server/game.js').then(async ({Game}) => {
   console.log(g.players.map(p => p.name + ': ' + p.score).join('  '));
 })"
 ```
+
+## Licence
+
+[PolyForm Noncommercial 1.0.0](LICENSE) — Copyright (c) 2026 James D.
+
+Play it, self-host it, fork it, change it: all fine for any **noncommercial**
+purpose, which explicitly covers private entertainment, hobby projects and
+study. Charities, schools and public institutions are covered too.
+
+What it does not permit is commercial use. You may not run it as a paid or
+revenue-generating service, or fold it into a commercial product, without
+written permission. If you want to do something commercial with it, ask.
+
+If you redistribute any part of it, you must pass on this licence and the
+`Required Notice` line at the top of it.
