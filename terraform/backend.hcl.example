@@ -1,0 +1,22 @@
+# Copy to backend.hcl (git-ignored) and fill in, then:
+#   terraform init -backend-config=backend.hcl
+#
+# Create the bucket first:
+#   wrangler r2 bucket create mexican-train-tfstate
+#
+# Follows https://developers.cloudflare.com/terraform/advanced-topics/remote-backend/
+
+bucket = "mexican-train-tfstate"
+key    = "mexican-train/terraform.tfstate"
+
+endpoints = {
+  s3 = "https://<CLOUDFLARE_ACCOUNT_ID>.r2.cloudflarestorage.com"
+}
+
+# These are R2 credentials, not AWS ones. Terraform's S3 backend is an AWS SDK
+# client and R2 speaks the same protocol, so the argument names are AWS-shaped —
+# no AWS account is involved anywhere.
+#
+# Get them from: R2 → API → Manage API Tokens → Create token (Object Read & Write)
+access_key = "<R2_ACCESS_KEY_ID>"
+secret_key = "<R2_SECRET_ACCESS_KEY>"

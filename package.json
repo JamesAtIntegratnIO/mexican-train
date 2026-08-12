@@ -1,0 +1,22 @@
+{
+  "name": "mexican-train",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Real-time online Mexican Train dominoes. Ephemeral in-memory sessions, share-a-URL joining.",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "cf:dev": "wrangler dev",
+    "cf:deploy": "wrangler deploy",
+    "tf:plan": "terraform -chdir=terraform plan",
+    "tf:apply": "terraform -chdir=terraform apply",
+    "soak": "node scripts/soak.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

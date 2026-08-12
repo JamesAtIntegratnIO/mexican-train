@@ -1,0 +1,30 @@
+name = "mexican-train"
+main = "worker/index.js"
+compatibility_date = "2025-04-01"
+
+# Every request hits the Worker first so the security headers and /api routing
+# apply; static files are then served through the ASSETS binding.
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = true
+
+[vars]
+# Minutes with nobody connected before a table is cleared (reconnect grace).
+EMPTY_GRACE_MIN = "15"
+# Minutes with no activity at all before a table is cleared.
+IDLE_MIN = "30"
+# Only needed if the app is served from a different host than the Worker.
+# ALLOWED_ORIGINS = "mexicantrain.integratn.io"
+
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "RoomDO"
+
+# SQLite-backed Durable Objects are the ones available on the free plan.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RoomDO"]
+
+[observability]
+enabled = true

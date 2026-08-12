@@ -1,0 +1,6 @@
+account_id = "<CLOUDFLARE_ACCOUNT_ID>"
+zone_id    = "<ZONE_ID_FOR_YOUR_DOMAIN>"
+hostname   = "mexicantrain.example.com"
+
+# Must match `name` in wrangler.toml
+# worker_name = "mexican-train"
