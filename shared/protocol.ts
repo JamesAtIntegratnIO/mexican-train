@@ -211,6 +211,29 @@ export type ClientMessage =
 
 export type ClientMessageType = ClientMessage['t'];
 
+// ---------------------------------------------------------------- the funnel
+
+/** The moments on the way to a table that the server cannot see for itself.
+ *  Everything before the socket opens is invisible to it: someone who lands on
+ *  the front page and leaves, or opens a shared link and never says who they
+ *  are, produces no room, no join, and no log line.
+ *
+ *  A closed set, and it lives here so the two ends cannot drift — the client
+ *  sends these names and the server accepts exactly these names. Anything an
+ *  event could identify a person by is deliberately absent: this is a tally of
+ *  moments, not a trail of one player through them.
+ *
+ *    home      the front door was rendered
+ *    link      a shared link was opened and the table was found
+ *    returned  a shared link was opened by someone already known at that table
+ *    made      a table was minted from the front door
+ *    code      a table was joined by typing its code
+ *    seat      a shared link was entered as a player
+ *    watch     a shared link was entered as a spectator
+ *
+ *  `home` and `link` are the denominators; the rest are what people did next. */
+export type FunnelEvent = 'home' | 'link' | 'returned' | 'made' | 'code' | 'seat' | 'watch';
+
 /** What came off the boneyard — sent only to the player who drew it. */
 export interface DrewMessage {
   t: 'drew';

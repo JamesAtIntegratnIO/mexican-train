@@ -2,8 +2,10 @@
 // every socket to the Durable Object that owns that table.
 
 import { newCode } from '../server/room-core.js';
-import type { Env } from './env.js';
+import type { Env, RateLimiterBinding } from './env.js';
 import { log, setLevel } from '../server/log.js';
+import { metrics, isFunnelEvent } from '../server/metrics.js';
+import { useAnalytics } from './analytics.js';
 
 export { RoomDO } from './room.js';
 
@@ -61,6 +63,7 @@ export default {
   // the shape the client already knows how to read.
   async fetch(request: Request, env: Env): Promise<Response> {
     setLevel(env.LOG_LEVEL);
+    useAnalytics(env);
     try {
       return await route(request, env);
     } catch (e) {
@@ -101,15 +104,35 @@ function apiRoute(request: Request, env: Env, url: URL): Promise<Response> | Res
   if (!originOk(request, env, pathname)) return json({ error: 'Bad origin.' }, 403);
 
   if (pathname === '/api/new' && request.method === 'POST') return mintRoom(request, env, pathname);
+  if (pathname === '/api/event' && request.method === 'POST') return trackEvent(request, env, url);
   if (pathname === '/api/health') return health(request, env);
   if (pathname.startsWith('/api/room/')) return roomInfo(env, pathname);
   return json({ error: 'Not found.' }, 404);
 }
 
+// A counter increment and deliberately nothing else: nothing is stored about
+// who sent it, and no log line is written — otherwise the cheapest way to run up
+// a logging bill would be to click. Refusals are counted rather than logged for
+// the same reason. Held to the same shape as the Node build's route, down to
+// the status codes, so the two cannot drift on what an event means.
+//
+// The name rides in the query string: there is no body to read, which is what
+// keeps this the cheapest route in the Worker. POST rather than GET so a
+// crawler, a prefetch or a link preview cannot inflate the count by visiting.
+async function trackEvent(request: Request, env: Env, url: URL): Promise<Response> {
+  // Charged before the name is looked at, so junk names are throttled on the
+  // same budget as real ones.
+  if (!(await allowed(env.EVENT_LIMIT, request, 'event'))) { metrics.refused(); return json({ error: 'Slow down.' }, 429); }
+  const e = url.searchParams.get('e') || '';
+  if (!isFunnelEvent(e)) { metrics.refused(); return json({ error: 'Unknown event.' }, 400); }
+  metrics.funnel(e);
+  return new Response(null, { status: 204, headers: securityHeaders(false) });
+}
+
 async function mintRoom(request: Request, env: Env, pathname: string): Promise<Response> {
   // Each table is its own Durable Object, so there's no shared pool to
   // exhaust — but minting one costs storage, so it is gated per IP.
-  if (!(await mintAllowed(request, env))) {
+  if (!(await allowed(env.NEW_ROOM_LIMIT, request, 'new'))) {
     log.throttle('warn', 'rate_limited', { path: pathname, limit: 'new' });
     return json({ error: "You're making tables too quickly." }, 429);
   }
@@ -163,19 +186,21 @@ async function assetRoute(request: Request, env: Env, url: URL): Promise<Respons
   return out;
 }
 
-// Table minting, throttled per IP by Cloudflare's own rate limiter — there is
-// no process here to hold buckets in, the way the Node build does.
+// Throttled per IP by Cloudflare's own rate limiter — there is no process here
+// to hold token buckets in, the way the Node build does. Each binding keeps its
+// own namespace, so the key is the caller and nothing else.
 //
-// If the binding is missing the gate cannot run, and quietly minting without it
-// is exactly the gap this closes — so say so, and let it through rather than
-// locking everyone out of a working deploy. Throttled: without it a missing
-// binding would cost a log line on every single request.
-async function mintAllowed(request: Request, env: Env): Promise<boolean> {
-  if (!env.NEW_ROOM_LIMIT) {
-    log.throttle('warn', 'rate_limiter_missing', { limit: 'new', note: 'NEW_ROOM_LIMIT binding not configured' });
+// If the binding is missing the gate cannot run, and quietly proceeding without
+// it is exactly the gap this closes — so say so, and let it through rather than
+// locking everyone out of a working deploy. Throttled, and keyed by which gate:
+// without that a missing binding would cost a line on every single request, and
+// a second missing one would hide behind the first.
+async function allowed(limiter: RateLimiterBinding | undefined, request: Request, which: string): Promise<boolean> {
+  if (!limiter) {
+    log.throttle('warn', 'rate_limiter_missing', { limit: which }, `rl:${which}`);
     return true;
   }
   const ip = request.headers.get('cf-connecting-ip') || 'unknown';
-  const { success } = await env.NEW_ROOM_LIMIT.limit({ key: ip });
+  const { success } = await limiter.limit({ key: ip });
   return success;
 }

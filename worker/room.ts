@@ -22,6 +22,7 @@ interface Attachment {
 }
 import { dispatch } from '../server/dispatch.js';
 import { log, setLevel } from '../server/log.js';
+import { useAnalytics } from './analytics.js';
 
 const STATE_KEY = 'room';
 const BOT_AT = 'botAt';
@@ -56,6 +57,10 @@ export class RoomDO {
     this.ctx = ctx;
     this.env = env;
     setLevel(env.LOG_LEVEL);
+    // A table's one telemetry sample is written when it is cleared, and that
+    // happens in here on an alarm — so the sink has to be installed here too,
+    // not only on the Worker that fronts us.
+    useAnalytics(env);
     this.emptyGraceMs = Number(env.EMPTY_GRACE_MIN || 15) * 60 * 1000;
     this.idleMs = Number(env.IDLE_MIN || 30) * 60 * 1000;
     this.room = null;
@@ -120,9 +125,9 @@ export class RoomDO {
 
   async alarm(): Promise<void> {
     if (!this.room) return;
-    const reason = this.room.expiry(this.emptyGraceMs, this.idleMs);
-    if (reason) {
-      this.room.dispose(reason);
+    const why = this.room.expiry(this.emptyGraceMs, this.idleMs);
+    if (why) {
+      this.room.dispose(why);
       await this.ctx.storage.deleteAll();     // the table is gone for good
       return;
     }

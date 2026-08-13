@@ -9,6 +9,8 @@ import { Game, Err, maxPlayersFor, handSize } from './game.js';
 import type { EnginePlayer, DrawResult } from './game.js';
 import { chooseMove, botName, randomTemper } from './bots.js';
 import { log } from './log.js';
+import { metrics } from './metrics.js';
+import type { ClearedWhy, TableSample } from './metrics.js';
 import type {
   PlayerId, Settings, RoomSnapshot, GameView, EngineGameView, ChatLine, ClientMessage,
 } from '../shared/protocol.js';
@@ -96,6 +98,37 @@ const errText = (e: unknown): string => (e instanceof Error ? e.message : String
 // A Game is plain data plus methods, so it round-trips through JSON intact.
 const reviveGame = (data: unknown): Game | null => (data ? Object.assign(Object.create(Game.prototype), data) : null);
 
+/** Running totals for the one telemetry line this table will ever produce.
+ *
+ *  Kept as the table goes rather than worked out at the end, because by the end
+ *  most of it is gone: a lobby seat is removed the moment its player leaves, a
+ *  watcher likewise, and a table is only cleared once everyone has left. Asking
+ *  "how many people were here" at disposal time answers zero almost every time,
+ *  which is how an abandoned lobby and a table nobody ever opened came to look
+ *  identical in the logs. */
+export interface RoomStats {
+  peakPlayers: number;
+  peakWatchers: number;
+  humans: number;
+  bots: number;
+  moves: number;
+  rounds: number;
+  finished: boolean;
+}
+
+const newStats = (): RoomStats => ({ peakPlayers: 0, peakWatchers: 0, humans: 0, bots: 0, moves: 0, rounds: 0, finished: false });
+
+// Why a table was cleared, and what the people at it are told. These were one
+// string until the first of them had to be counted: a sentence is the right
+// thing to show a player and the wrong thing to group a metric by.
+const CLEARED: Record<ClearedWhy, string> = {
+  empty: 'Everyone left this table, so it was cleared.',
+  idle: 'This table sat idle for a while and was cleared. Start a new one.',
+  other: 'This table was cleared.',
+};
+
+const clearedMessage = (why: ClearedWhy): string => CLEARED[why];
+
 export class Room {
   code: string;
   adapter: Adapter;
@@ -109,6 +142,7 @@ export class Room {
   settings: Settings;
   game: Game | null;
   chat: ChatLine[];
+  stats: RoomStats;
 
   // adapter: { send(conn, obj), close(conn, code, reason), scheduleBot(delayMs), cancelBot(), onChange() }
   constructor(code: string, adapter: Adapter = {}) {
@@ -123,6 +157,7 @@ export class Room {
     this.settings = { max: 12, foot: 1, scoring: 'house' };
     this.game = null;
     this.chat = [];
+    this.stats = newStats();
   }
 
   // ------------------------------------------------------------------ persistence
@@ -132,14 +167,19 @@ export class Room {
     return {
       code: this.code, createdAt: this.createdAt, emptySince: this.emptySince,
       lastActivity: this.lastActivity, hostId: this.hostId, settings: this.settings,
-      chat: this.chat, game: this.game,
+      chat: this.chat, game: this.game, stats: this.stats,
       players: this.players.map(strip), watchers: this.watchers.map(strip),
     };
   }
 
   static revive(data: any, adapter: Adapter): Room {
     const r = new Room(data.code, adapter);
-    Object.assign(r, data, { adapter, game: reviveGame(data.game) });
+    // Stats are merged over the defaults rather than assigned: a table stored
+    // by the previous deploy has no `stats` at all, or an older shape of one,
+    // and a counter that comes back undefined would poison every sum it lands
+    // in. Missing means zero, which is the truth about a table we weren't
+    // counting yet.
+    Object.assign(r, data, { adapter, game: reviveGame(data.game), stats: { ...r.stats, ...data.stats } });
     return r;
   }
 
@@ -177,6 +217,7 @@ export class Room {
     if (this.players.length >= MAX_PLAYERS) throw new Err('This table is full (8 players).');
     const p = { id: rid(), name: clean(name, `Player ${this.players.length + 1}`), bot: false, conn, connected: true, lastSeen: Date.now() };
     this.players.push(p);
+    this.stats.humans++;               // a seat taken, not a seat currently held
     this.say(`${p.name} joined.`);
     return p;
   }
@@ -237,6 +278,7 @@ export class Room {
     if (this.players.length >= MAX_PLAYERS) throw new Err('This table is full (8 players).');
     const p = { id: rid(), name: botName(this.players.map((x) => x.name)), bot: true, temper: randomTemper(), conn: null, connected: true };
     this.players.push(p);
+    this.stats.bots++;
     this.say(`${p.name} (bot) joined.`);
     this.tick();
   }
@@ -305,10 +347,14 @@ export class Room {
   act(id: PlayerId, msg: ClientMessage): DrawResult | void {
     if (!this.game) throw new Err('The game has not started.');
     if (msg.t === 'play') this.game.play(id, msg.tile, msg.train, msg.seg);
-    else if (msg.t === 'draw') { const r = this.game.draw(id); this.tick(); return r; }
+    else if (msg.t === 'draw') { const r = this.game.draw(id); this.stats.moves++; this.tick(); return r; }
     else if (msg.t === 'pass') this.game.pass(id);
     else if (msg.t === 'marker') this.game.marker(id, msg.up);
     else if (msg.t === 'engine') this.game.layEngine(id);
+    // Counted after the engine accepted it, so an illegal move is not a move. A
+    // marker is a flag on a train rather than a turn taken, so it isn't one
+    // either — otherwise every bot pass would score two.
+    if (msg.t !== 'marker') this.stats.moves++;
     this.tick();
   }
 
@@ -365,6 +411,7 @@ export class Room {
     else if (mv.type === 'play') g.play(seat.id, mv.tile, mv.train, mv.seg);
     else if (mv.type === 'draw') g.draw(seat.id);
     else g.pass(seat.id);
+    this.stats.moves++;              // a bot's turn is a turn like anyone's
   }
 
   // A bot only ever picks from legalMoves(), so landing here means the rules
@@ -388,10 +435,11 @@ export class Room {
 
   // ------------------------------------------------------------------ lifetime
 
-  // A game in play never expires, however long it runs.
-  expiry(emptyGraceMs: number, idleMs: number, now = Date.now()): string | null {
-    if (this.emptySince && now - this.emptySince > emptyGraceMs) return 'Everyone left this table, so it was cleared.';
-    if (now - this.lastActivity > idleMs) return 'This table sat idle for a while and was cleared. Start a new one.';
+  // A game in play never expires, however long it runs. Answers with the reason
+  // code; clearedMessage() turns that into the sentence the players see.
+  expiry(emptyGraceMs: number, idleMs: number, now = Date.now()): ClearedWhy | null {
+    if (this.emptySince && now - this.emptySince > emptyGraceMs) return 'empty';
+    if (now - this.lastActivity > idleMs) return 'idle';
     return null;
   }
 
@@ -446,6 +494,7 @@ export class Room {
   // of "something happened" — including bots taking their turns.
   tick(): void {
     this.lastActivity = Date.now();
+    this.count();
     for (const p of [...this.players, ...this.watchers]) {
       if (p.conn) this.adapter.send?.(p.conn, this.snapshot(p.id));
     }
@@ -453,17 +502,42 @@ export class Room {
     this.adapter.onChange?.();
   }
 
-  dispose(reason?: string): void {
-    log.info('room_disposed', {
-      code: this.code, reason,
-      players: this.players.length, watchers: this.watchers.length,
-      inGame: !!this.game, ageMin: Math.round((Date.now() - this.createdAt) / 60_000),
-    });
+  // Every state change funnels through tick(), so this is the cheapest honest
+  // place to take the measurements that only make sense as a high-water mark.
+  // Round progress is read rather than counted for the same reason it is kept
+  // at all: playAgain() throws the game away, and a table that played two games
+  // has played both of them.
+  count(): void {
+    const s = this.stats;
+    if (this.players.length > s.peakPlayers) s.peakPlayers = this.players.length;
+    if (this.watchers.length > s.peakWatchers) s.peakWatchers = this.watchers.length;
+    if (!this.game) return;
+    s.rounds = Math.max(s.rounds, this.game.roundIndex + 1);
+    s.finished ||= this.game.status === 'gameOver';
+  }
+
+  /** The table's whole story, assembled at the one moment all of it is true. */
+  sample(why: ClearedWhy): TableSample {
+    const { peakPlayers, peakWatchers, humans, bots, rounds, finished, moves } = this.stats;
+    return {
+      why, scoring: this.settings.scoring, max: this.settings.max, foot: this.settings.foot,
+      ageMin: Math.round((Date.now() - this.createdAt) / 60_000),
+      peakPlayers, peakWatchers, humans, bots, rounds, finished, moves,
+    };
+  }
+
+  dispose(why?: ClearedWhy): void {
+    const sample = this.sample(why ?? 'other');
+    // The single line a table costs, and now the single line that says whether
+    // it was ever played. The same numbers go to metrics, where they can be
+    // summed without anyone parsing a log.
+    log.info('room_disposed', { code: this.code, ...sample });
+    metrics.table(sample);
     this.adapter.cancelBot?.();
     for (const p of [...this.players, ...this.watchers]) {
       if (!p.conn) continue;
       // Say why, so anyone still looking at the page doesn't just see it die.
-      if (reason) this.adapter.send?.(p.conn, { t: 'fatal', msg: reason });
+      if (why) this.adapter.send?.(p.conn, { t: 'fatal', msg: clearedMessage(why) });
       this.adapter.close?.(p.conn, 4003, 'Room closed');
     }
   }

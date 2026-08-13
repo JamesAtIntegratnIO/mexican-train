@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { RoomDO } from '../worker/room.js';
 import worker from '../worker/index.js';
 import { fakeCtx, DEFAULT_ENV, assetEnv, settled, FakeWS } from './helpers/durable-object.js';
+import type { Env } from '../worker/env.js';
 
 /** RoomDO takes runtime WebSockets; FakeWS implements the handful of methods it
  *  actually calls, so it is handed over explicitly rather than by accident. */
@@ -145,6 +146,62 @@ describe('hibernation', () => {
     await settled();
     await woken.webSocketMessage(asWS(host), JSON.stringify({ t: 'ping' }));
     assert.equal(host.last()?.t, 'pong');
+  });
+});
+
+// Usage telemetry on this build cannot go in the logs — they are billed per
+// line — and cannot go in memory, because there isn't any that outlives a
+// request. It goes to Analytics Engine, so what matters here is that the points
+// are written at all, and that a deploy without the datasets still works.
+describe('telemetry', () => {
+  const dataset = (into: any[]) => ({ writeDataPoint: (p: any) => into.push(p) });
+  function analyticsEnv() {
+    const tables: any[] = [], funnel: any[] = [];
+    return { tables, funnel, env: { ...DEFAULT_ENV, TABLES: dataset(tables), FUNNEL: dataset(funnel) } as unknown as Env };
+  }
+  const post = (path: string, env: Env) => worker.fetch(new Request(`https://mexicantrain.example${path}`, { method: 'POST' }), env);
+
+  test('a cleared table writes one point, with the people who were here', async () => {
+    const { tables, env } = analyticsEnv();
+    const harness = fakeCtx();
+    const doo = new RoomDO(harness.ctx, env);
+    await settled();
+    await doo.fetch(new Request('https://do/create?code=TESTAB'));
+    const host = harness.connect();
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'join', name: 'Host' }));
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'addBot' }));
+    await doo.webSocketClose(asWS(host));
+
+    doo.room!.emptySince = Date.now() - 60 * 60_000;    // abandoned an hour ago
+    await doo.alarm();
+
+    assert.equal(tables.length, 1, `a cleared table wrote ${tables.length} points`);
+    const [p] = tables;
+    assert.equal(p.blobs[0], 'empty');
+    assert.equal(p.doubles[1], 2, 'peak players');
+    assert.equal(p.doubles[2], 1, 'humans');
+    assert.equal(p.doubles[3], 1, 'bots');
+  });
+
+  test('a funnel event is a point and an empty answer', async () => {
+    const { funnel, env } = analyticsEnv();
+    const r = await post('/api/event?e=made', env);
+    assert.equal(r.status, 204);
+    assert.deepEqual(funnel.map((p: any) => p.blobs[0]), ['made']);
+  });
+
+  test('a name nobody agreed on writes nothing', async () => {
+    const { funnel, env } = analyticsEnv();
+    assert.equal((await post('/api/event?e=havoc', env)).status, 400);
+    assert.equal((await post('/api/event', env)).status, 400);
+    assert.equal(funnel.length, 0);
+  });
+
+  test('a deploy with no datasets is a deploy without telemetry, not a broken one', async () => {
+    assert.equal((await post('/api/event?e=home', DEFAULT_ENV)).status, 204);
+    const { doo } = await seatedHost('NODATA');
+    doo.room!.emptySince = Date.now() - 60 * 60_000;
+    await assert.doesNotReject(() => doo.alarm());
   });
 });
 

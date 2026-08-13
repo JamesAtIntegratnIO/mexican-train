@@ -60,9 +60,9 @@ export function createRoom(): Room {
 export function sweep(now = Date.now()): number {
   let removed = 0;
   for (const [code, room] of rooms) {
-    const reason = room.expiry(EMPTY_GRACE_MS, IDLE_MS, now);
-    if (!reason) continue;
-    room.dispose(reason);
+    const why = room.expiry(EMPTY_GRACE_MS, IDLE_MS, now);
+    if (!why) continue;
+    room.dispose(why);
     rooms.delete(code);
     removed++;
   }

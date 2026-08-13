@@ -77,8 +77,22 @@ wouldn't exist in the next. Durable Objects are the exception: they're serverles
 One JSON object per line on stdout, which is what both hosts collect — Fly into
 its log stream, Workers into the tail that `[observability]` enables. Workers
 Logs bills per line, so the volume is kept deliberately low: **a table costs one
-line**, written when it is cleared, carrying how long it lived and whether a game
-was ever played. Everything else at `info` is the process starting and stopping.
+line**, written when it is cleared, carrying how long it lived, how many people
+were ever at it, and whether a game was played and finished. Everything else at
+`info` is the process starting and stopping.
+
+```json
+{"ts":"…","level":"info","evt":"room_disposed","code":"B2UEJF","why":"empty",
+ "scoring":"house","max":12,"foot":1,"ageMin":47,"peakPlayers":4,
+ "peakWatchers":1,"humans":3,"bots":1,"rounds":6,"finished":false,"moves":812}
+```
+
+`why` is a code (`empty`, `idle`), not the sentence the players are shown — a
+sentence is the right thing to put on someone's screen and the wrong thing to
+group a metric by. The counts are **peaks, not survivors**: a table is cleared
+because everyone left, and a lobby seat is removed the moment its player goes,
+so anything counted at the end reports an empty room and an abandoned lobby of
+six looks identical to a table nobody ever opened.
 
 Errors are never silent, but anything a stranger can trigger on repeat — a
 rejected origin, a 429, a flood-closed socket — is collapsed to at most one line
@@ -89,6 +103,77 @@ still reports immediately.
 
 `LOG_LEVEL=debug` adds a line per join and per table created. Useful locally,
 expensive in production. Hands, chat text and player names are never logged.
+
+### Usage
+
+The same numbers, somewhere you can add them up without parsing a log. Nothing
+here identifies anyone: it is a tally of moments, with no id, no cookie and
+nothing that could follow one person between two of them.
+
+Some of it the server cannot see at all. Everyone who lands on the front page
+and leaves, or opens a shared link and never says who they are, creates no table
+and produces no line anywhere — so the browser reports those few steps itself,
+by name, to `POST /api/event?e=NAME`:
+
+| | |
+| --- | --- |
+| `home` / `link` | the front door was shown / a shared link found its table |
+| `made` / `code` | a table was started / joined by typing its code |
+| `seat` / `watch` | a shared link was entered, to play or to watch |
+| `returned` | a shared link was reopened by someone already known there |
+
+The first two are the denominators; the rest are what people did next. The names
+are a closed set — anything else is a 400 — and the route is throttled per IP,
+answers 204, stores nothing about the caller and **never writes a log line**,
+since otherwise the cheapest way to run up a logging bill would be to click.
+Refusals are counted rather than logged. It is same-origin, so the app's own
+`connect-src 'self'` already allows it and no CSP is loosened to let telemetry
+out. There is no third-party analytics here and adding one would mean opening
+that policy up.
+
+**On a single Node host**, everything counted since boot is at `GET /api/stats`
+— tables cleared and why, people who sat down, bots, games started and finished,
+rounds, moves, table-minutes, and the funnel above. In memory like everything
+else, so a restart is a reset.
+
+```json
+{"ok":true,"uptime":88400,"rooms":3,
+ "counts":{"tables":112,"games":74,"games.finished":31,"players":389,
+           "cleared.empty":95,"funnel.home":1204,"funnel.made":118}}
+```
+
+**On Cloudflare** there is nowhere to keep a counter — a Worker has no memory
+that outlives a request, and each table is its own Durable Object with no
+registry above it — so samples go to **Analytics Engine**, which is written to
+rather than logged and so is not billed by the line. It is on the free plan too:
+[100,000 data points a day](https://developers.cloudflare.com/analytics/analytics-engine/pricing/),
+10,000 read queries, kept for three months. A table costs one point and a whole
+session's funnel costs a handful, so ordinary play is nowhere near that ceiling
+— a flood of funnel events is the only realistic way to approach it, which is
+why the event route is throttled harder here than it needs to be for its own
+sake. Three months is also the horizon of every question you can ask: this is a
+"how is it going" store, not an archive.
+
+Two datasets, `mt_tables` (one row per table) and `mt_funnel` — separate partly
+so the noisy half can be dropped on its own, by deleting the `FUNNEL` binding,
+without losing the table rows. The column layout is in
+[worker/analytics.ts](worker/analytics.ts) and is the query contract, since
+Analytics Engine has columns by position and not by name. Query it over the
+[SQL API](https://developers.cloudflare.com/analytics/analytics-engine/sql-api/):
+
+```sql
+SELECT toDate(timestamp) AS day,
+       count()                AS tables,
+       sum(double3)           AS people,
+       countIf(double6 > 0)   AS games,
+       countIf(double7 = 1)   AS finished,
+       round(avg(double1))    AS avg_minutes
+FROM mt_tables WHERE timestamp > now() - INTERVAL '30' DAY GROUP BY day ORDER BY day
+```
+
+Both datasets are optional bindings: delete the two
+`[[analytics_engine_datasets]]` blocks from `wrangler.toml` and the app deploys
+and runs exactly as before, counting nothing.
 
 ### Session lifetime
 
@@ -214,6 +299,7 @@ server/
                 sockets or timers, and is shared by both deployment targets
   dispatch.ts   what a client message means — shared, so the two can't drift
   log.ts        structured logs, shared by both targets
+  metrics.ts    usage counters and the sink each host plugs into
   rooms.ts      Node transport: in-memory registry, real sockets, setTimeout
   index.ts      Node host: composes the two halves, owns the process
   http.ts         the JSON API and the static files
@@ -223,6 +309,7 @@ worker/
   index.ts      Cloudflare Worker: assets, /api, socket routing
   room.ts       the Durable Object — one per table, alarms + hibernation
   env.ts        the bindings, as declared in wrangler.toml
+  analytics.ts  the Analytics Engine sink, and the column layout it writes
 client/                                    bundled to public/app.js
   app.ts       entry — page-level wiring, then go
   dom.ts         escaping, $, toasts, the modal        ─┐ leaves: import
@@ -240,6 +327,7 @@ client/                                    bundled to public/app.js
   table.ts       the shell around all of it
   session.ts     what a fresh snapshot means
   entry.ts       the front door and the shared-link gate
+  track.ts       the funnel: the few steps that never reach a socket
 public/
   index.html app shell
   styles.css
@@ -249,6 +337,7 @@ test/
   durable-object.test.ts  the Cloudflare transport, against a fake runtime
   resilience.test.ts      what a crash costs, in real processes
   log.test.ts             log levels, throttling, the table lifecycle line
+  metrics.test.ts         that the usage numbers are true, peaks especially
 scripts/
   soak.ts    plays thousands of games and asserts the rules hold
 ```
