@@ -201,7 +201,12 @@ GROUP BY toDate(timestamp)
 ORDER BY toDate(timestamp)
 ```
 
-Tables cleared, people seated, how many dealt a round, how many finished. The
+Tables cleared, people seated, how many dealt a round, how many finished —
+though **`mt_tables` lags, by design**. A table's row is written when it is
+cleared, and a table with a game in it is held for 12 hours after the last
+person leaves, so tonight's games arrive in tomorrow's data. An empty result
+after an evening of play is the sweeper waiting, not a fault. `mt_funnel` is
+the live half: those rows land as they happen. The
 expression is repeated in `GROUP BY` rather than named with `AS` and grouped by
 the name: aliases are worth avoiding here, both because a short one is easily a
 word the parser has reserved, and because the documentation's own examples
@@ -396,7 +401,9 @@ count.
 - **Per-player display.** Tile size (a zoom slider — pips fall back to numerals
   once tiles get too small to read), numerals vs. pips, and sound on/off. All
   local preferences, so everyone at the table sets their own.
-- Rooms are swept 30 minutes after the last person leaves.
+- Rooms are swept once everyone has been gone a while — 15 minutes for a lobby
+  that never started, 12 hours for a table with a game in it. See
+  [Session lifetime](#session-lifetime).
 
 ## Layout
 
