@@ -1,0 +1,16 @@
+// The browser project. esbuild does the bundling, so this one only checks —
+// and it deliberately has no Node types, which is what stops `process.env` or
+// `node:fs` drifting into code that has to run in a browser.
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": [],
+    "noEmit": true
+  },
+  // Only this directory is listed; the shared protocol types come along because
+  // they are imported, and get checked under these globals too.
+  "include": ["**/*.ts"]
+}

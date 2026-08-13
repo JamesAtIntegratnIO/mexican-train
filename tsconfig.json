@@ -1,0 +1,16 @@
+// The Node project: the server, its tests, and the soak. This is the only
+// project that emits — `dist/` is what the container runs and what the tests
+// exercise, so the thing under test stays the thing that ships.
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2023"],
+    "types": ["node", "@cloudflare/workers-types"],
+    "outDir": "dist",
+    "rootDir": ".",
+    "sourceMap": true
+  },
+  "include": ["server/**/*.ts", "test/**/*.ts", "scripts/**/*.ts", "shared/**/*.ts"]
+}

@@ -6,7 +6,7 @@
 import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { RoomDO } from '../worker/room.js';
-import { fakeCtx, DEFAULT_ENV, settled } from './helpers/durable-object.mjs';
+import { fakeCtx, DEFAULT_ENV, settled } from './helpers/durable-object.js';
 
 async function freshTable(code = 'TESTAB') {
   const harness = fakeCtx();

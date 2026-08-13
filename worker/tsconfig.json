@@ -1,0 +1,18 @@
+// The Workers project. wrangler bundles it, so this one only checks.
+//
+// The files under server/ that the Worker imports — room-core, game, bots,
+// dispatch, log — are pulled in by their imports and checked a second time
+// here, under the Workers globals rather than Node's. That double-check is the
+// point: it is what mechanically enforces the claim in room-core.ts that the
+// table logic knows nothing about its host.
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2023"],
+    "types": ["@cloudflare/workers-types"],
+    "noEmit": true
+  },
+  "include": ["**/*.ts"]
+}

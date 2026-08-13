@@ -6,8 +6,47 @@
 // share this file, so the rules of the table can't drift between them.
 
 import { Game, Err, maxPlayersFor, handSize } from './game.js';
+import type { EnginePlayer } from './game.js';
 import { chooseMove, botName, randomTemper } from './bots.js';
 import { log } from './log.js';
+import type {
+  PlayerId, Settings, RoomSnapshot, GameView, EngineGameView, ChatLine, ClientMessage,
+} from '../shared/protocol.js';
+
+/** A connection handle. The core never looks inside one — it only ever hands it
+ *  back to the adapter — which is exactly what lets a Node socket and a
+ *  hibernatable Durable Object socket be the same thing here. */
+export type Conn = unknown;
+
+export interface Seat {
+  id: PlayerId;
+  name: string;
+  bot: boolean;
+  temper?: number;
+  conn: Conn | null;
+  connected: boolean;
+  lastSeen?: number;
+}
+
+export interface Watcher {
+  id: PlayerId;
+  name: string;
+  conn: Conn | null;
+  connected: boolean;
+  spectator: true;
+}
+
+/** What a host must provide. Every method is optional so a room can be built
+ *  with no adapter at all, which is what the tests do when they only care about
+ *  the table's state. */
+export interface Adapter {
+  send?(conn: Conn, obj: unknown): void;
+  close?(conn: Conn, code: number, reason: string): void;
+  scheduleBot?(delayMs: number): void;
+  cancelBot?(): void;
+  onChange?(): void;
+}
+
 
 export { Err };
 
@@ -21,7 +60,7 @@ export const ABSENT_TAKEOVER_MS = 15000;
 
 // Rejection sampling off crypto bytes — no modulo bias, and not guessable the
 // way Math.random() codes were. Web Crypto so it runs unchanged on Workers.
-export function newCode(len = CODE_LEN) {
+export function newCode(len: number = CODE_LEN): string {
   const out = [];
   const limit = 256 - (256 % CODE_ALPHABET.length);
   while (out.length < len) {
@@ -35,23 +74,36 @@ export function newCode(len = CODE_LEN) {
   return out.join('');
 }
 
-export function rid(n = 16) {
+export function rid(n = 16): string {
   const bytes = crypto.getRandomValues(new Uint8Array(n));
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '').slice(0, n);
 }
 
-const clean = (name, fallback) => {
+const clean = (name: unknown, fallback: string): string => {
   const s = String(name || '').replace(/\s+/g, ' ').trim().slice(0, 18);
   return s || fallback;
 };
-const wait = ([lo, hi]) => lo + Math.random() * (hi - lo);
+const wait = ([lo, hi]: readonly [number, number]): number => lo + Math.random() * (hi - lo);
 
 // A Game is plain data plus methods, so it round-trips through JSON intact.
-const reviveGame = (data) => (data ? Object.assign(Object.create(Game.prototype), data) : null);
+const reviveGame = (data: unknown): Game | null => (data ? Object.assign(Object.create(Game.prototype), data) : null);
 
 export class Room {
+  code: string;
+  adapter: Adapter;
+  createdAt: number;
+  /** When the last person left, or null while anyone is still here. */
+  emptySince: number | null;
+  lastActivity: number;
+  players: Seat[];
+  watchers: Watcher[];
+  hostId: PlayerId | null;
+  settings: Settings;
+  game: Game | null;
+  chat: ChatLine[];
+
   // adapter: { send(conn, obj), close(conn, code, reason), scheduleBot(delayMs), cancelBot(), onChange() }
-  constructor(code, adapter = {}) {
+  constructor(code: string, adapter: Adapter = {}) {
     this.code = code;
     this.adapter = adapter;
     this.createdAt = Date.now();
@@ -67,7 +119,7 @@ export class Room {
 
   // ------------------------------------------------------------------ persistence
 
-  toJSON() {
+  toJSON(): Record<string, unknown> {
     const strip = (p) => ({ ...p, conn: null, connected: false });
     return {
       code: this.code, createdAt: this.createdAt, emptySince: this.emptySince,
@@ -77,7 +129,7 @@ export class Room {
     };
   }
 
-  static revive(data, adapter) {
+  static revive(data: any, adapter: Adapter): Room {
     const r = new Room(data.code, adapter);
     Object.assign(r, data, { adapter, game: reviveGame(data.game) });
     return r;
@@ -85,7 +137,7 @@ export class Room {
 
   // ------------------------------------------------------------------ membership
 
-  join(conn, { pid, name, spectate }) {
+  join(conn: Conn, { pid, name, spectate }: { pid?: PlayerId | null; name?: string; spectate?: boolean }): Seat | Watcher {
     if (spectate) return this.watch(conn, { pid, name });
     const seat = pid && this.players.find((x) => x.id === pid);
     const p = seat ? this.reclaimSeat(seat, conn, name) : this.takeSeat(conn, name);
@@ -97,14 +149,14 @@ export class Room {
   // A second connection for an identity that is already at the table supersedes
   // the first — a reload, or the same link opened in another tab. Shared by
   // players and watchers, who reconnect on identical terms.
-  adopt(member, conn) {
+  adopt(member: Seat | Watcher, conn: Conn): void {
     if (member.conn && member.conn !== conn) this.adapter.close?.(member.conn, 4001, 'Reconnected elsewhere');
     member.conn = conn;
     member.connected = true;
   }
 
   // A returning human takes their seat back off the bot that stood in for them.
-  reclaimSeat(p, conn, name) {
+  reclaimSeat(p: Seat, conn: Conn, name?: string): Seat {
     this.adopt(p, conn);
     p.bot = false;
     if (this.game) this.game.player(p.id).bot = false;
@@ -112,7 +164,7 @@ export class Room {
     return p;
   }
 
-  takeSeat(conn, name) {
+  takeSeat(conn: Conn, name?: string): Seat {
     if (this.game) throw new Err('That game is already under way.');
     if (this.players.length >= MAX_PLAYERS) throw new Err('This table is full (8 players).');
     const p = { id: rid(), name: clean(name, `Player ${this.players.length + 1}`), bot: false, conn, connected: true, lastSeen: Date.now() };
@@ -123,7 +175,7 @@ export class Room {
 
   // Spectators may arrive at any point, including mid-game, but must say who
   // they are — the table always knows exactly who is watching.
-  watch(conn, { pid, name }) {
+  watch(conn: Conn, { pid, name }: { pid?: PlayerId | null; name?: string }): Watcher {
     const nm = clean(name, '');
     if (!nm) throw new Err('Give a name before watching.');
     let w = pid && this.watchers.find((x) => x.id === pid);
@@ -140,11 +192,11 @@ export class Room {
     return w;
   }
 
-  member(id) { return this.players.find((x) => x.id === id) || this.watchers.find((x) => x.id === id); }
-  watcher(id) { return this.watchers.find((x) => x.id === id); }
-  anyoneHere() { return this.players.some((x) => x.connected) || this.watchers.some((x) => x.connected); }
+  member(id: PlayerId): Seat | Watcher | undefined { return this.players.find((x) => x.id === id) || this.watchers.find((x) => x.id === id); }
+  watcher(id: PlayerId): Watcher | undefined { return this.watchers.find((x) => x.id === id); }
+  anyoneHere(): boolean { return this.players.some((x) => x.connected) || this.watchers.some((x) => x.connected); }
 
-  leave(conn) {
+  leave(conn: Conn): void {
     const w = this.watchers.find((x) => x.conn === conn);
     if (w) {
       this.watchers = this.watchers.filter((x) => x !== w);
@@ -164,14 +216,14 @@ export class Room {
     this.tick();
   }
 
-  reassignHost() {
+  reassignHost(): void {
     const next = this.players.find((x) => x.connected && !x.bot) || this.players.find((x) => !x.bot);
     this.hostId = next ? next.id : null;
   }
 
-  requireHost(id) { if (id !== this.hostId) throw new Err('Only the host can do that.'); }
+  requireHost(id: PlayerId): void { if (id !== this.hostId) throw new Err('Only the host can do that.'); }
 
-  addBot(byId) {
+  addBot(byId: PlayerId): void {
     this.requireHost(byId);
     if (this.game) throw new Err('The game has already started.');
     if (this.players.length >= MAX_PLAYERS) throw new Err('This table is full (8 players).');
@@ -181,7 +233,7 @@ export class Room {
     this.tick();
   }
 
-  removePlayer(byId, targetId) {
+  removePlayer(byId: PlayerId, targetId: PlayerId): void {
     this.requireHost(byId);
     if (this.game) throw new Err('The game has already started.');
     if (targetId === this.hostId) throw new Err("You can't remove yourself.");
@@ -193,7 +245,7 @@ export class Room {
     this.tick();
   }
 
-  rename(id, name) {
+  rename(id: PlayerId, name: string): void {
     const p = this.member(id);
     if (!p) return;
     p.name = clean(name, p.name);
@@ -201,7 +253,7 @@ export class Room {
     this.tick();
   }
 
-  setSettings(byId, s) {
+  setSettings(byId: PlayerId, s: Partial<Settings>): void {
     this.requireHost(byId);
     if (this.game) throw new Err('The game has already started.');
     if ([6, 9, 12].includes(s.max)) this.settings.max = s.max;
@@ -212,7 +264,7 @@ export class Room {
 
   // ------------------------------------------------------------------ game flow
 
-  start(byId) {
+  start(byId: PlayerId): void {
     this.requireHost(byId);
     if (this.game) throw new Err('The game has already started.');
     if (this.players.length < 2) throw new Err('You need at least 2 players.');
@@ -227,14 +279,14 @@ export class Room {
     this.tick();
   }
 
-  nextRound(byId) {
+  nextRound(byId: PlayerId): void {
     this.requireHost(byId);
     if (!this.game || this.game.status !== 'roundOver') throw new Err('The round is still in play.');
     this.game.startRound();
     this.tick();
   }
 
-  playAgain(byId) {
+  playAgain(byId: PlayerId): void {
     this.requireHost(byId);
     this.game = null;
     this.players = this.players.filter((p) => p.connected || p.bot);
@@ -242,7 +294,7 @@ export class Room {
     this.tick();
   }
 
-  act(id, msg) {
+  act(id: PlayerId, msg: ClientMessage): unknown {
     if (!this.game) throw new Err('The game has not started.');
     if (msg.t === 'play') this.game.play(id, msg.tile, msg.train, msg.seg);
     else if (msg.t === 'draw') { const r = this.game.draw(id); this.tick(); return r; }
@@ -252,7 +304,7 @@ export class Room {
     this.tick();
   }
 
-  fillSeat(byId, targetId) {
+  fillSeat(byId: PlayerId, targetId: PlayerId): void {
     this.requireHost(byId);
     const p = this.players.find((x) => x.id === targetId);
     if (!p || p.bot || p.connected) throw new Err('That seat is still occupied.');
@@ -265,7 +317,7 @@ export class Room {
   // ------------------------------------------------------------------ automation
 
   // Who, if anyone, the clock is waiting on — a bot, or someone who dropped.
-  pendingSeat() {
+  pendingSeat(): { seat: Seat; delay: number } | null {
     const g = this.game;
     if (!g || g.status !== 'playing') return null;
     const seat = this.players.find((x) => x.id === g.current.id);
@@ -275,14 +327,14 @@ export class Room {
     return { seat, delay: absent ? ABSENT_TAKEOVER_MS : wait(BOT_DELAY) };
   }
 
-  schedule() {
+  schedule(): void {
     this.adapter.cancelBot?.();
     const pending = this.pendingSeat();
     if (pending) this.adapter.scheduleBot?.(pending.delay);
   }
 
   // Play one automated turn. Returns true if the board moved.
-  runBot() {
+  runBot(): boolean {
     const g = this.game;
     if (!g || g.status !== 'playing') return false;
     const seat = this.players.find((x) => x.id === g.current.id);
@@ -293,7 +345,7 @@ export class Room {
     return true;
   }
 
-  takeBotTurn(g, seat) {
+  takeBotTurn(g: Game, seat: Seat): void {
     const mv = chooseMove(g, seat.id);
     // Markers are manual, so bots have to work theirs deliberately — and only
     // while it is still their turn, hence before the move lands.
@@ -314,7 +366,7 @@ export class Room {
   //
   // Throttled by the fault: a position the engine keeps mishandling comes round
   // again every bot turn, and one line a minute says as much as hundreds would.
-  botWedged(g, seat, e) {
+  botWedged(g: Game, seat: Seat, e: unknown): void {
     log.throttle('error', 'bot_move_failed', {
       code: this.code, seat: seat.id, phase: g.phase, round: g.roundIndex,
       boneyard: g.boneyard.length, hand: g.player(seat.id)?.hand.length, err: e,
@@ -329,7 +381,7 @@ export class Room {
   // ------------------------------------------------------------------ lifetime
 
   // A game in play never expires, however long it runs.
-  expiry(emptyGraceMs, idleMs, now = Date.now()) {
+  expiry(emptyGraceMs: number, idleMs: number, now = Date.now()): string | null {
     if (this.emptySince && now - this.emptySince > emptyGraceMs) return 'Everyone left this table, so it was cleared.';
     if (now - this.lastActivity > idleMs) return 'This table sat idle for a while and was cleared. Start a new one.';
     return null;
@@ -337,12 +389,12 @@ export class Room {
 
   // ------------------------------------------------------------------ output
 
-  say(text) {
+  say(text: string): void {
     this.chat.push({ system: true, text, ts: Date.now() });
     if (this.chat.length > 80) this.chat.shift();
   }
 
-  chatFrom(id, text) {
+  chatFrom(id: PlayerId, text: unknown): void {
     const p = this.member(id);
     if (!p) return;
     const body = String(text || '').slice(0, 240).trim();
@@ -352,7 +404,21 @@ export class Room {
     this.tick();
   }
 
-  snapshot(forId) {
+  // The rules engine has no idea whether anyone is on the other end of a
+  // socket, so the room stitches presence into the players it produced. Doing
+  // it here means the client gets one list to render rather than two it has to
+  // join by id at paint time.
+  withPresence(view: EngineGameView): GameView {
+    return {
+      ...view,
+      players: view.players.map((p) => ({
+        ...p,
+        connected: !!this.players.find((x) => x.id === p.id)?.connected,
+      })),
+    };
+  }
+
+  snapshot(forId: PlayerId): RoomSnapshot {
     return {
       t: 'room',
       code: this.code,
@@ -364,13 +430,13 @@ export class Room {
       watchers: this.watchers.map((w) => ({ id: w.id, name: w.name, connected: w.connected })),
       spectating: !!this.watcher(forId),
       chat: this.chat.slice(-30),
-      game: this.game ? this.game.view(forId) : null,   // an unknown id yields the public view: no hand, no moves
+      game: this.game ? this.withPresence(this.game.view(forId)) : null,   // an unknown id yields the public view: no hand, no moves
     };
   }
 
   // Every state change funnels through tick(), so this is the honest definition
   // of "something happened" — including bots taking their turns.
-  tick() {
+  tick(): void {
     this.lastActivity = Date.now();
     for (const p of [...this.players, ...this.watchers]) {
       if (p.conn) this.adapter.send?.(p.conn, this.snapshot(p.id));
@@ -379,7 +445,7 @@ export class Room {
     this.adapter.onChange?.();
   }
 
-  dispose(reason) {
+  dispose(reason?: string): void {
     log.info('room_disposed', {
       code: this.code, reason,
       players: this.players.length, watchers: this.watchers.length,

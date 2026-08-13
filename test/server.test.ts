@@ -2,7 +2,7 @@
 
 import { test, before, after, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { startServer, openSocket, sleep } from './helpers/server.mjs';
+import { startServer, openSocket, sleep } from './helpers/server.js';
 
 let srv;
 before(async () => { srv = await startServer(); });

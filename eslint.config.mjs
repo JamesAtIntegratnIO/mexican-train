@@ -14,6 +14,8 @@
 // passing is the normal state of affairs and a failure means something genuinely
 // grew rather than that the bar was set fashionably low.
 
+import tsParser from '@typescript-eslint/parser';
+
 const limits = {
   // Cyclomatic complexity: independent paths through a function. Past ~10 the
   // branch combinations outnumber what anyone will actually test.
@@ -41,12 +43,18 @@ const limits = {
 
 export default [
   {
-    // Build output and vendored state. `.wrangler` in particular holds bundled
-    // copies of this very source, which would otherwise be linted twice and
-    // reported against generated line numbers.
-    ignores: ['node_modules/', '.wrangler/', 'terraform/', 'public/vendor/'],
+    // Build output and vendored state. `dist/` and `public/app.js` are compiled
+    // from sources that are themselves linted, so linting them again would
+    // report every finding twice, against generated line numbers.
+    ignores: ['node_modules/', 'dist/', '.wrangler/', 'terraform/', 'public/app.js'],
   },
   {
+    files: ['**/*.ts'],
+    languageOptions: { parser: tsParser, ecmaVersion: 2024, sourceType: 'module' },
+    rules: limits,
+  },
+  {
+    // The config files themselves are still plain JavaScript.
     files: ['**/*.js', '**/*.mjs'],
     languageOptions: { ecmaVersion: 2024, sourceType: 'module' },
     rules: limits,
@@ -57,7 +65,7 @@ export default [
     // Length is not capped: a table-driven case list or a long sequence of
     // assertions is a legitimate shape for a test and splitting one to satisfy
     // a line count makes it harder to read, not easier.
-    files: ['test/**/*.mjs', 'scripts/soak.mjs'],
+    files: ['test/**/*.ts', 'scripts/soak.ts'],
     rules: {
       'max-statements': 'off',
       'max-lines-per-function': 'off',

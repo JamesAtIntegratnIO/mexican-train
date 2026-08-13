@@ -6,17 +6,69 @@
 // 3 the train FORKS: each covering tile starts its own branch, and from then on
 // the train has several live open ends. Branches are modelled as segments.
 
-export const parse = (id) => id.split('-').map(Number);
-export const pips = (id) => { const [a, b] = parse(id); return a + b; };
-export const isDouble = (id) => { const [a, b] = parse(id); return a === b; };
+import type {
+  TileId, PlayerId, TrainId, Scoring, Foot, Phase, Status, Prompt,
+  LaidTile, EngineGameView, Move, LogLine,
+} from '../shared/protocol.js';
 
-export function makeSet(max) {
-  const tiles = [];
+/** A player as the engine holds them: the public figures plus the hand itself,
+ *  which never leaves this process except as a count. */
+export interface EnginePlayer {
+  id: PlayerId;
+  name: string;
+  bot: boolean;
+  temper?: number;
+  hand: TileId[];
+  score: number;
+  roundScores: number[];
+  openingDone: boolean;
+}
+
+/** One branch of a train. `closed` means it has forked and is spent. */
+export interface Seg {
+  id: number;
+  parent: number | null;
+  from: number;
+  tiles: LaidTile[];
+  end: number;
+  closed: boolean;
+}
+
+export interface Train {
+  id: TrainId;
+  owner: PlayerId | null;
+  open: boolean;
+  nextSeg: number;
+  segs: Seg[];
+}
+
+/** An open pigeon foot, waiting on `need - placed` more toes of `value`. */
+export interface PendingFoot {
+  train: TrainId;
+  seg: number;
+  value: number;
+  need: number;
+  placed: number;
+}
+
+export interface GameOptions {
+  players: Array<{ id: PlayerId; name: string; bot?: boolean; temper?: number }>;
+  max?: number;
+  foot?: Foot;
+  scoring?: Scoring;
+}
+
+export const parse = (id: TileId): number[] => id.split('-').map(Number);
+export const pips = (id: TileId): number => { const [a, b] = parse(id); return a + b; };
+export const isDouble = (id: TileId): boolean => { const [a, b] = parse(id); return a === b; };
+
+export function makeSet(max: number): TileId[] {
+  const tiles: TileId[] = [];
   for (let a = 0; a <= max; a++) for (let b = a; b <= max; b++) tiles.push(`${a}-${b}`);
   return tiles;
 }
 
-function shuffle(arr, rng = Math.random) {
+function shuffle<T>(arr: T[], rng: () => number = Math.random): T[] {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(rng() * (i + 1));
     [arr[i], arr[j]] = [arr[j], arr[i]];
@@ -26,7 +78,7 @@ function shuffle(arr, rng = Math.random) {
 
 // Deal sizes always leave a real boneyard — a round with nothing to draw from
 // turns into a slog of forced passes.
-export function handSize(playerCount, max) {
+export function handSize(playerCount: number, max: number): number {
   // Official double-12 table: 2-4 → 15, 5-6 → 11, 7-8 → 8.
   if (max >= 12) return playerCount <= 4 ? 15 : playerCount <= 6 ? 11 : 8;
   // Smaller sets have no published table; scaled to leave a comparable boneyard.
@@ -35,7 +87,7 @@ export function handSize(playerCount, max) {
 }
 
 // Smallest table the set can seat while keeping a boneyard worth drawing from.
-export function maxPlayersFor(max) {
+export function maxPlayersFor(max: number): number {
   const total = (max + 1) * (max + 2) / 2;
   for (let n = 8; n >= 2; n--) if (total - n * handSize(n, max) >= Math.max(4, n)) return n;
   return 2;
@@ -44,7 +96,31 @@ export function maxPlayersFor(max) {
 export class Err extends Error {}
 
 export class Game {
-  constructor({ players, max = 12, foot = 1, scoring = 'house' }) {
+  // Set once, for the whole game.
+  max: number;
+  foot: Foot;
+  scoring: Scoring;
+  players: EnginePlayer[];
+  roundIndex: number;
+  status: Status;
+  log: LogLine[];
+
+  // Set by startRound(), which the constructor always calls — so these are
+  // never actually undefined on a live game. They are declared separately
+  // because a round can be dealt again over the top of a finished one.
+  boneyard!: TileId[];
+  trains!: Train[];
+  starter!: number;
+  turn!: number;
+  pending!: PendingFoot[];
+  drewThisTurn!: boolean;
+  passStreak!: number;
+  lastPlay!: { tile: TileId; trainId: TrainId; segId: number } | null;
+  phase!: Phase;
+  engineDown!: boolean;
+  roundWinner!: PlayerId | null;
+
+  constructor({ players, max = 12, foot = 1, scoring = 'house' }: GameOptions) {
     this.max = max;
     this.foot = [1, 2, 3].includes(foot) ? foot : 1;
     this.scoring = ['house', 'official', 'pips'].includes(scoring) ? scoring : 'house';
@@ -62,14 +138,14 @@ export class Game {
   get engine() { return this.max - this.roundIndex; }
   get current() { return this.players[this.turn]; }
 
-  player(id) { return this.players.find((p) => p.id === id); }
-  train(id) { return this.trains.find((t) => t.id === id); }
-  seg(train, segId) { return train.segs.find((s) => s.id === segId); }
+  player(id: PlayerId): EnginePlayer | undefined { return this.players.find((p) => p.id === id); }
+  train(id: TrainId): Train | undefined { return this.trains.find((t) => t.id === id); }
+  seg(train: Train, segId: number): Seg | undefined { return train.segs.find((s) => s.id === segId); }
 
   // Resolve the train and branch a move names, saying which of the two was
   // wrong. A client that has fallen behind the table will name a branch that
   // has since forked away, so this is an ordinary refusal, not a fault.
-  locate(trainId, segId) {
+  locate(trainId: TrainId, segId: number): { train: Train; seg: Seg } {
     const train = this.train(trainId);
     if (!train) throw new Err('Unknown train.');
     const seg = this.seg(train, segId);
@@ -81,7 +157,7 @@ export class Game {
   // be in the phase that action belongs to, and it has to be your turn. Only
   // the phase complaint is passed in — "you can't do that yet" reads differently
   // depending on what you tried to do.
-  requireTurn(playerId, phase, notYet, notYours = "It isn't your turn.") {
+  requireTurn(playerId: PlayerId, phase: Phase, notYet: string, notYours = "It isn't your turn."): EnginePlayer {
     if (this.status !== 'playing') throw new Err('The round is over.');
     if (this.phase !== phase) throw new Err(notYet);
     const p = this.current;
@@ -89,7 +165,7 @@ export class Game {
     return p;
   }
 
-  note(text, kind = 'info') {
+  note(text: string, kind = 'info'): void {
     this.log.push({ text, kind, n: this.log.length });
     if (this.log.length > 60) this.log.shift();
   }
@@ -135,7 +211,7 @@ export class Game {
     this.trains.push(mexican);
   }
 
-  newTrain(id, owner) {
+  newTrain(id: TrainId, owner: PlayerId | null): Train {
     return {
       id, owner, open: false, nextSeg: 1,
       segs: [{ id: 0, parent: null, from: this.engine, tiles: [], end: this.engine, closed: false }],
@@ -156,7 +232,7 @@ export class Game {
   }
 
   // Laying the engine is a play in its own right, so it uses up your turn.
-  layEngine(playerId) {
+  layEngine(playerId: PlayerId): void {
     const p = this.requireTurn(playerId, 'seeking', 'The engine is already down.');
     const engineTile = `${this.engine}-${this.engine}`;
     if (!p.hand.includes(engineTile)) throw new Err(`You don't have the double ${this.engine}.`);
@@ -177,12 +253,12 @@ export class Game {
 
   // Seeking phase: draw one tile and keep it. Drawing the engine does not lay
   // it for you; the turn stays put so you can put it down yourself.
-  seekDraw(playerId) {
+  seekDraw(playerId: PlayerId): { tile: TileId; engine: boolean } {
     const p = this.current;
     if (p.id !== playerId) throw new Err("It isn't your turn.");
     if (!this.boneyard.length) throw new Err('The boneyard is empty.');
 
-    const tile = this.boneyard.pop();
+    const tile = this.boneyard.pop()!;   // guarded above: the boneyard is not empty
     p.hand.push(tile);
     p.hand.sort(sortTiles);
     if (tile === `${this.engine}-${this.engine}`) {
@@ -196,16 +272,16 @@ export class Game {
 
   // ---------------------------------------------------------------- legality
 
-  footOn(trainId, segId) { return this.pending.find((f) => f.train === trainId && f.seg === segId); }
+  footOn(trainId: TrainId, segId: number): PendingFoot | undefined { return this.pending.find((f) => f.train === trainId && f.seg === segId); }
 
   // Which trains this player may touch, ignoring per-segment detail.
-  canPlayOn(player, train) {
+  canPlayOn(player: EnginePlayer, train: Train): boolean {
     if (!player.openingDone) return train.owner === player.id; // first turn: your own train only
     if (train.owner === player.id) return true;
     return train.open;   // a marker exposes EVERY branch of that train
   }
 
-  legalMoves(player) {
+  legalMoves(player: EnginePlayer): Move[] {
     if (this.phase !== 'play') return [];
     const moves = [];
     for (const train of this.trains) {
@@ -241,7 +317,7 @@ export class Game {
 
   // ---------------------------------------------------------------- actions
 
-  play(playerId, tile, trainId, segId) {
+  play(playerId: PlayerId, tile: TileId, trainId: TrainId, segId: number): void {
     const { p, train, seg, foot, attach, outer } = this.checkPlay(playerId, tile, trainId, segId);
 
     p.hand.splice(p.hand.indexOf(tile), 1);
@@ -259,7 +335,7 @@ export class Game {
   // table would notice it: whose turn, whose tile, which train, which branch,
   // then whether the tile actually fits. Throws Err, or hands back the pieces
   // the play itself needs so they aren't looked up twice.
-  checkPlay(playerId, tile, trainId, segId) {
+  checkPlay(playerId: PlayerId, tile: TileId, trainId: TrainId, segId: number) {
     const p = this.requireTurn(playerId, 'play', `The double ${this.engine} still has to turn up.`);
     if (!p.hand.includes(tile)) throw new Err("That tile isn't in your hand.");
     const { train, seg } = this.locate(trainId, segId);
@@ -281,7 +357,7 @@ export class Game {
 
   // Feeding a foot starts a fresh branch each time; ordinary play extends the
   // line. Either way the tile lands on `target`, which is what carries on.
-  attachTile(train, seg, foot, tile, attach, outer) {
+  attachTile(train: Train, seg: Seg, foot: PendingFoot | undefined, tile: TileId, attach: number, outer: number): Seg {
     let target = seg;
     if (foot) {
       target = { id: train.nextSeg++, parent: seg.id, from: attach, tiles: [], end: attach, closed: false };
@@ -296,7 +372,7 @@ export class Game {
 
   // Book-keeping for pigeon feet: the one this tile just fed, and the new one it
   // may itself have opened. Returns whether a foot filled up.
-  settleFeet(seg, target, foot, tile, trainId, outer) {
+  settleFeet(seg: Seg, target: Seg, foot: PendingFoot | undefined, tile: TileId, trainId: TrainId, outer: number): boolean {
     let footDone = false;
     if (foot && ++foot.placed >= foot.need) {
       seg.closed = true;                        // the double's branch is spent; its toes carry on
@@ -312,12 +388,12 @@ export class Game {
   }
 
   // How the log refers to the train a tile just landed on.
-  whose(train, p) {
+  whose(train: Train, p: EnginePlayer): string {
     if (train.owner === null) return 'the Mexican train';
-    return train.owner === p.id ? 'their train' : `${this.player(train.owner).name}'s train`;
+    return train.owner === p.id ? 'their train' : `${this.player(train.owner)!.name}'s train`;
   }
 
-  draw(playerId) {
+  draw(playerId: PlayerId): { tile: TileId; playable?: boolean; ended?: boolean; engine?: boolean } | void {
     if (this.status !== 'playing') throw new Err('The round is over.');
     // Drawing is the one action that means something in both phases, so the
     // seeking case is a redirect rather than a refusal.
@@ -327,7 +403,7 @@ export class Game {
     if (!this.boneyard.length) throw new Err('The boneyard is empty.');
     if (this.legalMoves(p).length) throw new Err('You have a playable tile — you must play it.');
 
-    const tile = this.boneyard.pop();
+    const tile = this.boneyard.pop()!;   // guarded above: the boneyard is not empty
     p.hand.push(tile);
     p.hand.sort(sortTiles);
     this.drewThisTurn = true;
@@ -343,15 +419,15 @@ export class Game {
 
   // Being unable to play is forced, so the marker is raised for you. Choosing to
   // raise or lower it at any other point is still entirely yours.
-  autoMark(p) {
-    const train = this.train(p.id);
+  autoMark(p: EnginePlayer): void {
+    const train = this.train(p.id)!;   // every player owns a train from the deal
     if (!train.open) { train.open = true; this.note(`${p.name} can't play — marker up.`, 'mark'); }
     else this.note(`${p.name} can't play.`, 'mark');
     this.passStreak++;
     this.endTurn();
   }
 
-  pass(playerId) {
+  pass(playerId: PlayerId): void {
     const p = this.requireTurn(playerId, 'play', 'Draw for the engine first.');
     if (this.legalMoves(p).length) throw new Err('You have a playable tile — you must play it.');
     if (this.boneyard.length && !this.drewThisTurn) throw new Err('You must draw first.');
@@ -359,15 +435,15 @@ export class Game {
   }
 
   // Markers are entirely the player's call, raised or lowered on their own turn.
-  marker(playerId, up) {
+  marker(playerId: PlayerId, up: boolean): void {
     const p = this.requireTurn(playerId, 'play', 'The round has not started.', 'You can only move your marker on your turn.');
-    const train = this.train(playerId);
+    const train = this.train(playerId)!;
     if (train.open === !!up) return;
     train.open = !!up;
     this.note(`${p.name} ${up ? 'put their marker up' : 'took their marker down'}.`, 'mark');
   }
 
-  forceSkip(playerId) {
+  forceSkip(playerId: PlayerId): void {
     if (this.status !== 'playing' || this.current.id !== playerId) return;
     if (this.phase === 'seeking') { this.turn = (this.turn + 1) % this.players.length; return; }
     this.passStreak++;
@@ -387,14 +463,14 @@ export class Game {
   // house    — blanks are free, but the 0|0 stings (the rule at this table)
   // official — every blank side is 25, the 0|0 is 50
   // pips     — straight dot count, nothing special
-  tileScore(id) {
+  tileScore(id: TileId): number {
     const [a, b] = parse(id);
     if (a === 0 && b === 0) return this.scoring === 'pips' ? 0 : 50;
     if (this.scoring === 'official') return (a === 0 ? 25 : a) + (b === 0 ? 25 : b);
     return a + b;
   }
 
-  finishRound(winnerId) {
+  finishRound(winnerId: PlayerId | null): void {
     this.status = 'roundOver';
     this.roundWinner = winnerId;
     for (const p of this.players) {
@@ -402,13 +478,13 @@ export class Game {
       p.roundScores.push(points);
       p.score += points;
     }
-    if (winnerId) this.note(`${this.player(winnerId).name} went out!`, 'win');
+    if (winnerId) this.note(`${this.player(winnerId)!.name} went out!`, 'win');
     if (this.roundIndex + 1 >= this.totalRounds) this.status = 'gameOver';
   }
 
   // ---------------------------------------------------------------- serialisation
 
-  view(forId) {
+  view(forId: PlayerId): EngineGameView {
     const me = this.player(forId);
     const yours = this.status === 'playing' && me && this.current.id === forId;
     return {
@@ -452,9 +528,9 @@ export class Game {
   }
 }
 
-const label = (id) => id.replace('-', ' | ');
+const label = (id: TileId): string => id.replace('-', ' | ');
 // Heavy tiles first, grouped by their high end — the order most people fan by.
-const sortTiles = (x, y) => {
+const sortTiles = (x: TileId, y: TileId): number => {
   const [a1, b1] = parse(x), [a2, b2] = parse(y);
   return b2 - b1 || a2 - a1;
 };

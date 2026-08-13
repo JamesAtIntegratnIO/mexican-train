@@ -13,7 +13,7 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function runFault(mode) {
   return new Promise((resolve) => {
-    execFile(process.execPath, ['test/fixtures/fault.mjs', mode], { cwd: ROOT, timeout: 30_000 },
+    execFile(process.execPath, ['test/fixtures/fault.js', mode], { cwd: ROOT, timeout: 30_000 },
       (err, stdout, stderr) => {
         const results = {};
         for (const line of stdout.split('\n')) {
@@ -57,7 +57,7 @@ describe('the fault floor', () => {
 
 describe('shutdown', () => {
   test('SIGTERM closes sockets and exits cleanly', async () => {
-    const { startServer, openSocket } = await import('./helpers/server.mjs');
+    const { startServer, openSocket } = await import('./helpers/server.js');
     const srv = await startServer();
     const ws = openSocket(srv.port, 'ZZZZZZ');
     await ws.opened;
