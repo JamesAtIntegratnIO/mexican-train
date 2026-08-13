@@ -398,7 +398,7 @@ a { color: var(--dim); }
 .marker-btn.up { border-color: var(--gold); color: var(--gold); background: var(--gold-soft); }
 .marker-btn.up .pip { border-color: var(--gold); background: radial-gradient(circle at 35% 30%, #ffe08a, var(--gold)); box-shadow: 0 0 9px rgba(240,180,41,.7); }
 
-.hand { display: flex; gap: 7px; overflow-x: auto; padding: 16px 12px 4px; scrollbar-width: none; }
+.hand { display: flex; gap: 7px; overflow: auto; padding: 16px 12px 4px; scrollbar-width: none; }
 .hand::-webkit-scrollbar { display: none; }
 .hand .tile { cursor: pointer; transition: transform .16s cubic-bezier(.2,.9,.3,1), opacity .16s, box-shadow .16s; }
 .hand .tile:hover { transform: translateY(-5px); }
@@ -486,9 +486,25 @@ a { color: var(--dim); }
 .handtools .btn.on {
   background: var(--gold-soft); border-color: var(--gold); color: var(--gold);
 }
-/* In arrange mode the tiles are grab handles, so the browser must not claim the
-   gesture for scrolling — hence touch-action, and hence the explicit mode. */
-.hand.arranging { cursor: grab; }
+/* Arranging, the hand wraps into rows instead of scrolling sideways. Sliding a
+   stack of a dozen dominoes left and right to find the one you want is fine
+   with a mouse and miserable with a thumb, and a phone is never as wide as a
+   full hand — so for as long as you are moving tiles about, all of them are on
+   screen at once and none of them is a scroll away. Only then: laid out in rows
+   the hand costs most of the dock, which is a poor trade while you are playing
+   out of it and the board is the thing you want to see.
+
+   The row gap is twice the column gap because a picked tile rises 11px, and it
+   should rise into space rather than into the row above it.
+
+   Capped, because a hand grows: every turn you can't play adds a tile, and four
+   or five rows is where taking more of the screen stops being generous and
+   starts pushing the Arrange button that gets you out of here off the bottom of
+   it. Past the cap the hand scrolls, and a tile held at the top or bottom edge
+   winds it along — see wind() in client/hand.ts. */
+.hand.arranging {
+  cursor: grab; flex-wrap: wrap; align-content: flex-start; row-gap: 14px; max-height: 52dvh;
+}
 .hand.arranging .item { touch-action: none; cursor: grab; opacity: 1 !important; filter: none !important; }
 /* A tile inside a pile is part of the thing being dragged, and touch-action is
    read off whatever is under the finger — so it has to say `none` too, or the
