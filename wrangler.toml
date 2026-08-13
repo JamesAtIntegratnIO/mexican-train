@@ -47,9 +47,14 @@ simple = { limit = 20, period = 60 }
 # FUNNEL binding sheds the noisy half and leaves the table rows, which are the
 # ones worth having.
 #
-# Both are optional to the code: if your account cannot create these datasets,
-# delete these two blocks and everything else still deploys and runs, with no
-# usage telemetry on this build.
+# Analytics Engine is included on the free plan but is OFF until enabled for the
+# account, and a deploy that binds a dataset without it fails outright — error
+# 10089, nothing published. `wrangler deploy --dry-run` does not catch it,
+# because it never calls the API. Enable it once at
+# dash.cloudflare.com → Workers → Analytics Engine.
+#
+# Both are optional to the code: delete these two blocks and everything else
+# still deploys and runs, with no usage telemetry on this build.
 [[analytics_engine_datasets]]
 binding = "TABLES"
 dataset = "mt_tables"

@@ -30,6 +30,15 @@ rather than timers. It fits inside the Workers **free** plan.
 Infrastructure is Terraform, with state in R2 — see [terraform/README.md](terraform/README.md)
 for the one-time setup.
 
+**Analytics Engine has to be switched on for the account first**, at
+[dash.cloudflare.com → Workers → Analytics Engine](https://dash.cloudflare.com/?to=/:account/workers/analytics-engine).
+It is included on the free plan but off until enabled, and a deploy that binds a
+dataset without it fails outright — `wrangler` stops with *"You need to enable
+Analytics Engine"* (code 10089) and publishes nothing. `--dry-run` will not warn
+you: it never calls the API. If you would rather not enable it, delete the two
+`[[analytics_engine_datasets]]` blocks from `wrangler.toml` and everything else
+deploys and runs unchanged, counting nothing on this build.
+
 ```bash
 npm run tf:plan     # bundle the worker, then plan
 npm run tf:apply    # bundle, then deploy script + DO + hostname
@@ -147,7 +156,9 @@ that outlives a request, and each table is its own Durable Object with no
 registry above it — so samples go to **Analytics Engine**, which is written to
 rather than logged and so is not billed by the line. It is on the free plan too:
 [100,000 data points a day](https://developers.cloudflare.com/analytics/analytics-engine/pricing/),
-10,000 read queries, kept for three months. A table costs one point and a whole
+10,000 read queries, kept for three months — but it has to be
+[enabled for the account](https://dash.cloudflare.com/?to=/:account/workers/analytics-engine)
+before a deploy that binds a dataset will succeed at all. A table costs one point and a whole
 session's funnel costs a handful, so ordinary play is nowhere near that ceiling
 — a flood of funnel events is the only realistic way to approach it, which is
 why the event route is throttled harder here than it needs to be for its own
