@@ -250,6 +250,8 @@ scripts/
 ## Tests
 
 ```bash
+npm run dev       # tsx runs the sources, reloads on save — no build
+npm run dev:client # rebuild the client bundle on save, in a second terminal
 npm run build     # tsc -> dist/, esbuild -> public/app.js
 npm test          # builds, then the suites above, then the soak
 npm run types     # all three projects, no emit
@@ -284,6 +286,15 @@ than a compile error — and the browser needed a build step regardless.
 
 `shared/protocol.ts` is the contract the two ends previously only implied. It
 compiles to nothing and ships nothing.
+
+Locally, `npm run dev` skips the build entirely — tsx runs the TypeScript
+sources on Node and reloads on save. It does not type-check, so `npm run types`
+is still the thing that says whether the code is sound.
+
+Deliberately still Node rather than bun: the suites assert on signal handling
+and the fault breaker, and the socket upgrade writes raw HTTP bytes before the
+handshake. Those are exactly the places runtimes differ, and a bug that only
+appears in production is the one thing this layout is arranged to avoid.
 
 ## The complexity gate
 

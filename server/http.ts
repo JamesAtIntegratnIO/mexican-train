@@ -11,11 +11,14 @@ import { Err } from './game.js';
 import { log } from './log.js';
 import { clientIp, originAllowed, rateLimiter, securityHeaders } from './security.js';
 
-// Resolved from the compiled location, not the source one: this file runs as
-// dist/server/http.js, so the repo root — and the public/ that sits beside
-// dist/ in both the checkout and the container — is two levels up.
-const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const PUBLIC = path.join(ROOT, 'public');
+// This file runs from two places: dist/server/http.js in the built tree, and
+// server/http.ts directly under tsx in development. public/ sits beside dist/
+// in the first and beside server/ in the second, so both are tried rather than
+// assuming one — getting this wrong 404s the entire app while every API route
+// keeps answering, which is a confusing way to spend an afternoon.
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const PUBLIC = [path.join(HERE, '..', '..', 'public'), path.join(HERE, '..', 'public')]
+  .find((dir) => fs.existsSync(dir)) ?? path.join(HERE, '..', '..', 'public');
 
 const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.ico': 'image/x-icon' };
 
