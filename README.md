@@ -83,6 +83,12 @@ wouldn't exist in the next. Durable Objects are the exception: they're serverles
 | `CHAT_ENABLED` | `0` | Player-to-player chat. See [Chat](#chat) before turning it on. |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info` or `debug` |
 
+One thing is not a variable and has to be edited: the `og:image` tag in
+[public/index.html](public/index.html) names its host in full, because a link
+scraper fetches that image with no page to resolve a relative path against. A
+deployment somewhere else changes that one line, or its shared links preview
+with somebody else's train.
+
 ### Logs
 
 One JSON object per line on stdout, which is what both hosts collect — Fly into
@@ -499,8 +505,9 @@ client/                                    bundled to public/app.js
   entry.ts       the front door and the shared-link gate
   track.ts       the funnel: the few steps that never reach a socket
 public/
-  index.html app shell
+  index.html app shell, and the tags a shared link previews with
   styles.css
+  og.png     the link-preview card — drawn by scripts/og-image.ts
   app.js     built from client/ — not checked in, never edit it
 test/
   server.test.ts          the Node transport, over real HTTP and sockets
@@ -511,8 +518,9 @@ test/
   metrics.test.ts         that the usage numbers are true, peaks especially
   usage.test.ts           the arithmetic the usage report does on them
 scripts/
-  soak.ts    plays thousands of games and asserts the rules hold
-  usage.ts   reads the Analytics Engine datasets back and reports them
+  soak.ts     plays thousands of games and asserts the rules hold
+  usage.ts    reads the Analytics Engine datasets back and reports them
+  og-image.ts rasterises the locomotive into public/og.png (`npm run og`)
 ```
 
 ## Tests
