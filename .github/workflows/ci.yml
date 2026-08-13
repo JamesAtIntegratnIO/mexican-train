@@ -43,6 +43,11 @@ jobs:
       - name: Install
         run: npm ci
 
+      # Runs before the tests: a function that has grown past the gate is worth
+      # hearing about even when the suite is green, and it takes a second.
+      - name: Complexity gate
+        run: npm run lint
+
       - name: Tests
         run: node --test test/*.test.mjs
 

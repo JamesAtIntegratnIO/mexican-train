@@ -52,6 +52,9 @@ jobs:
       # ci.yml runs these too, on the pull request. Repeated here on purpose:
       # main can be pushed to directly, and this is the last gate before the
       # thing is live.
+      - name: Complexity gate
+        run: npm run lint
+
       - name: Tests
         run: node --test test/*.test.mjs
 

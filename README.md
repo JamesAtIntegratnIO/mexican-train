@@ -203,18 +203,32 @@ server/
   bots.js       bot move selection and temperament
   room-core.js  the table: lobby, membership, bot driver — knows nothing about
                 sockets or timers, and is shared by both deployment targets
+  dispatch.js   what a client message means — shared, so the two can't drift
+  log.js        structured logs, shared by both targets
   rooms.js      Node transport: in-memory registry, real sockets, setTimeout
-  index.js      Node HTTP + WebSocket server, static files
+  index.js      Node host: composes the two halves, owns the process
+  http.js         the JSON API and the static files
+  sockets.js      the upgrade gate and a socket's lifetime
   security.js   rate limiting, origin checks, security headers
 worker/
   index.js      Cloudflare Worker: assets, /api, socket routing
   room.js       the Durable Object — one per table, alarms + hibernation
-  log.js        structured logs, shared by both targets
-  dispatch.js   what a client message means — shared, so the two can't drift
 public/
   index.html app shell
-  app.js     client — vanilla, no build step
   styles.css
+  app.js     client entry — page-level wiring, then go
+  dom.js       escaping, $, toasts, the modal          ─┐ leaves: import
+  state.js     everything the client remembers          │ nothing of ours
+  sound.js     the table noises                        ─┘
+  tiles.js     how a domino and a player are drawn
+  net.js       the socket and the reconnect ladder
+  actions.js   committing a tile
+  lanes.js     the board — one lane per train, one rail per branch
+  modals.js    rules, scoreboard, end of round
+  lobby.js     the pre-game table and its settings
+  table.js     the table chrome, your hand, turn bar, side panel
+  session.js   what a fresh snapshot means
+  entry.js     the front door and the shared-link gate
 test/
   server.test.mjs          the Node transport, over real HTTP and sockets
   durable-object.test.mjs  the Cloudflare transport, against a fake runtime
@@ -229,8 +243,28 @@ scripts/
 ```bash
 npm test          # the suites above, then the soak
 npm run soak -- 5 # more games per rule combination
+npm run lint      # the complexity gate
 npm run check     # everything, plus a wrangler dry run over the Worker config
 ```
+
+## The complexity gate
+
+`npm run lint` is not a style checker and not a bug finder — there is no
+formatter here and no `recommended` rule set. It asks one question, in four
+ways, because no single metric catches everything: cyclomatic complexity ≤ 10,
+nesting ≤ 4, statements per function ≤ 25, and lines per function ≤ 60. A flat
+90-line function scores fine on complexity; a tight 6-line one can still be
+nested five deep.
+
+The numbers were picked against a census of this codebase rather than out of the
+air — the median function scores 2 and the 90th percentile scores 7 — so passing
+is the normal state and a failure means something actually grew. Complexity uses
+ESLint's `modified` variant, which scores a `switch` as one branch: a flat
+dispatch switch is the most readable form of multi-way dispatch, and the only
+way to satisfy the classic count is to turn it into a lookup table, which serves
+the metric rather than the reader. Tests keep the complexity and nesting limits
+but not the length ones — a long list of assertions is a legitimate shape for a
+test. It runs in CI ahead of the suites, and again before a deploy.
 
 No test framework and no test dependencies — `node --test` and the one runtime
 dependency the app already has. The suites run the real entrypoint as a child
