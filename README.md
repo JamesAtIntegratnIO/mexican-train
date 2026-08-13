@@ -173,14 +173,28 @@ Analytics Engine has columns by position and not by name. Query it over the
 [SQL API](https://developers.cloudflare.com/analytics/analytics-engine/sql-api/):
 
 ```sql
-SELECT toDate(timestamp) AS day,
-       count()                AS tables,
-       sum(double3)           AS people,
-       countIf(double6 > 0)   AS games,
-       countIf(double7 = 1)   AS finished,
-       round(avg(double1))    AS avg_minutes
+SELECT toDate(timestamp)                        AS day,
+       sum(_sample_interval)                    AS tables,
+       sum(_sample_interval * double3)          AS people,
+       sumIf(_sample_interval, double6 > 0)     AS games,
+       sumIf(_sample_interval, double7 = 1)     AS finished,
+       round(sum(_sample_interval * double1) / sum(_sample_interval)) AS avg_minutes
 FROM mt_tables WHERE timestamp > now() - INTERVAL '30' DAY GROUP BY day ORDER BY day
 ```
+
+Or the funnel, which is where the drop-off lives:
+
+```sql
+SELECT index1 AS event, sum(_sample_interval) AS n
+FROM mt_funnel WHERE timestamp > now() - INTERVAL '7' DAY GROUP BY event ORDER BY n DESC
+```
+
+`_sample_interval` is not decoration. Past a certain rate Analytics Engine keeps
+one stored row to stand for several real ones, and that column says how many —
+so a count is `sum(_sample_interval)` rather than `count()`, a total is
+`sum(_sample_interval * doubleN)`, and an average has to weight both halves.
+Sampling picks on busy index values, so `mt_funnel` is the one that will reach
+it first, and `home` the value within it.
 
 Both datasets are optional bindings: delete the two
 `[[analytics_engine_datasets]]` blocks from `wrangler.toml` and the app deploys
