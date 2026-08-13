@@ -40,7 +40,8 @@ export interface LaidTile {
 }
 
 /** An open pigeon foot: this branch takes `need` toes of `value` and has `placed`
- *  so far. Only ever present when the table's foot setting is 2 or 3. */
+ *  so far, and its train is frozen until it fills. Only ever present when the
+ *  table's foot setting is 2 or 3. */
 export interface FootView {
   need: number;
   placed: number;

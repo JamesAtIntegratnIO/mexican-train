@@ -316,6 +316,10 @@ a { color: var(--dim); }
 .rail.trail::after {
   content: "⋯"; margin-left: 6px; color: var(--dimmer); font-size: 13px; line-height: 1; flex: none;
 }
+/* an unfilled foot freezes the whole train: every other branch of it recedes
+   until the last toe is down, so the foot is the only thing that reads as live */
+.rail.frozen { opacity: .5; }
+.rail.frozen .slot { border-style: dotted; }
 .rail.live { border-color: var(--gold) !important; box-shadow: 0 0 0 1px var(--gold), 0 0 24px -6px rgba(240,180,41,.55); cursor: pointer; }
 .rail.live:hover { background: rgba(240,180,41,.1); }
 /* branches sit indented under the double they grew from */

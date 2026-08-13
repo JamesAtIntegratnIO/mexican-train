@@ -28,46 +28,77 @@ const t0 = Date.now();
 // ---------------------------------------------------------------- pigeon feet
 //
 // The rule, stated once: a double opens a foot on the branch it lands on, and
-// until that foot is full *that branch* takes nothing but toes. The rest of the
-// train is unaffected — including branches that forked off earlier. Getting
-// this wrong is invisible in a scoring check and very visible at the table, so
-// it is pinned here as a scripted position rather than left to the fuzzer to
-// stumble into.
-function forkScenario(): void {
+// until that foot is full the *whole train* is frozen — the branch owing toes
+// takes toes and nothing else, and no other branch of that train grows at all,
+// not the toes already down and not branches that forked off an earlier double.
+// Every other train carries on. Getting this wrong is invisible in a scoring
+// check and very visible at the table, so it is pinned here as a scripted
+// position rather than left to the fuzzer to stumble into.
+/** One table, driven by hand: put a tile down, ask whether it is on offer, or
+ *  check that the table refuses it both ways — not offered, and not accepted if
+ *  played anyway. Player A holds two spares so a play never empties the hand
+ *  and ends the round. */
+function scriptedTable() {
   const g = new Game({ players: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], max: 12, foot: 2, scoring: 'house' });
   g.phase = 'play';                     // skip the engine hunt and drive the board by hand
   g.engineDown = true;
   const A = g.player('a')!;
   A.openingDone = true;
-  const lay = (tile: TileId, seg: number) => { g.turn = 0; A.hand = [tile, '0-0', '1-1']; g.play('a', tile, 'a', seg); };
+  const hold = (tile: TileId) => { g.turn = 0; A.hand = [tile, '0-0', '1-1']; };
+  const offered = (tile: TileId, seg: number): boolean => {
+    hold(tile);
+    return g.legalMoves(A).some((m) => m.seg === seg && m.tile === tile);
+  };
+  return {
+    g,
+    offered,
+    lay: (tile: TileId, seg: number) => { hold(tile); g.play('a', tile, 'a', seg); },
+    refuses: (tile: TileId, seg: number): boolean => {
+      if (offered(tile, seg)) return false;
+      try { g.play('a', tile, 'a', seg); return false; } catch { return true; }
+    },
+  };
+}
 
-  lay('6-12', 0);                       // train a: 12 -> 6
-  lay('6-6', 0);                        // a double on 6 opens a foot needing two toes
-  lay('6-3', 0);                        // toe 1 starts branch 1, ending 3
-  lay('6-4', 0);                        // toe 2 starts branch 2, ending 4 — the foot is full
+type Table = ReturnType<typeof scriptedTable>;
 
-  const segs = g.train('a')!.segs;
+// A double, then one toe of the two it wants. The train is frozen throughout —
+// including the toe just laid, which is the case that reads most like an open
+// end and is the one players actually hit.
+function freezeWhileFootIsShort(t: Table): void {
+  t.lay('6-12', 0);                     // train a: 12 -> 6
+  t.lay('6-6', 0);                      // a double on 6 opens a foot needing two toes
+  t.lay('6-3', 0);                      // toe 1 starts branch 1, ending 3 — one toe still owed
+  if (!t.refuses('3-9', 1)) fail('forks: a fresh toe grew while its own foot still owed a toe');
+}
+
+// The last toe lands: the doubled branch is spent and both toes become the
+// train's live ends.
+function thawWhenFootFills(t: Table): void {
+  t.lay('6-4', 0);                      // toe 2 starts branch 2, ending 4 — the foot is full
+  const segs = t.g.train('a')!.segs;
   if (segs.length !== 3) fail(`forks: expected 3 branches after a filled foot, got ${segs.length}`);
   if (!segs[0].closed) fail('forks: the doubled branch should be spent once its foot filled');
-
-  lay('3-3', 1);                        // now a double on one of the two forks
-  if (g.pending.length !== 1 || g.pending[0].seg !== 1) fail('forks: expected exactly one open foot, on branch 1');
-
-  g.turn = 0; A.hand = ['4-5', '3-9'];
-  // The bug this guards: an open foot on branch 1 must not close branch 2.
-  if (!g.legalMoves(A).some((m) => m.seg === 2 && m.tile === '4-5')) {
-    fail('forks: a foot on one branch suppressed the legal move on a sibling branch');
+  if (!t.offered('3-9', 1) || !t.offered('4-5', 2)) {
+    fail('forks: a branch stayed shut after the foot that forked it filled');
   }
-  try { g.play('a', '4-5', 'a', 2); }
-  catch (e) { fail(`forks: sibling branch rejected a matching tile — ${e instanceof Error ? e.message : String(e)}`); }
-
-  // ...while the branch that owes toes still takes toes and nothing else.
-  g.turn = 0; A.hand = ['8-8', '3-9'];
-  let refused = false;
-  try { g.play('a', '8-8', 'a', 1); } catch { refused = true; }
-  if (!refused) fail('forks: a branch owing toes accepted a tile that cannot feed it');
 }
-forkScenario();
+
+// A double on one fork freezes the train all over again — including the other
+// fork, which came off the earlier double and has nothing to do with this one.
+function refreezeOnALaterDouble(t: Table): void {
+  t.lay('3-3', 1);
+  if (t.g.pending.length !== 1 || t.g.pending[0].seg !== 1) fail('forks: expected exactly one open foot, on branch 1');
+  if (!t.refuses('4-5', 2)) fail('forks: a sibling branch grew while the train owed toes');
+  // ...while the branch that owes toes takes toes and nothing else.
+  if (!t.refuses('8-8', 1)) fail('forks: a branch owing toes accepted a tile that cannot feed it');
+  if (!t.offered('3-9', 1)) fail('forks: the branch owing toes refused a toe');
+}
+
+const scripted = scriptedTable();
+freezeWhileFootIsShort(scripted);
+thawWhenFootFills(scripted);
+refreezeOnALaterDouble(scripted);
 
 // ---------------------------------------------------------------- the sweep
 
@@ -131,7 +162,7 @@ function checkPosition(g: Game, me: EnginePlayer, foot: Foot): void {
   const offered = g.legalMoves(me);
   checkOffers(g, me, offered);
   checkFeet(g, foot);
-  siblingChecks += checkSiblingsStayOpen(g, me, offered);
+  siblingChecks += checkSiblingsStayShut(g, me, offered);
 
   // A spectator view must never carry anyone's hand.
   const pub = g.view('nobody');
@@ -163,14 +194,17 @@ function checkOffers(g: Game, me: EnginePlayer, offered: Move[]): void {
     if (!g.canPlayOn(me, g.train(mv.train)!)) fail('offered a move on a train closed to that player');
     const seg = g.seg(g.train(mv.train)!, mv.seg)!;
     const f = g.footOn(mv.train, mv.seg);
-    // A foot binds its own branch: on that branch only toes may be played.
+    // A foot freezes its train: the branch owing toes is the only one on offer,
+    // and on that branch only toes may be played.
+    const frozen = g.footFreezing(mv.train);
+    if (frozen && frozen.seg !== mv.seg) fail('offered a play on a train frozen by an open foot');
     if (f && !parse(mv.tile).includes(f.value)) fail('offered a tile that does not feed the open foot');
     if (!f && seg.closed) fail('offered a play on a branch that has already forked');
   }
 }
 
 // Every open foot has to describe a real, still-growable branch. A foot left
-// pointing at a spent branch would freeze that branch for the rest of the round.
+// pointing at a spent branch would freeze that train for the rest of the round.
 function checkFeet(g: Game, foot: Foot): void {
   if (foot < 2 && g.pending.length) fail('feet opened on a table that covers doubles once');
   for (const f of g.pending) {
@@ -185,11 +219,12 @@ function checkFeet(g: Game, foot: Foot): void {
   }
 }
 
-// The rule the table cares about: a foot binds its own branch, not the train.
-// So whenever one branch owes toes and a sibling branch is open and matchable,
-// the sibling must still be on offer. Returns how many times that situation
-// actually came up, so a run that never exercised it can't look like a pass.
-function checkSiblingsStayOpen(g: Game, me: EnginePlayer, offered: Move[]): number {
+// The rule the table cares about: a foot freezes its whole train. So whenever
+// one branch owes toes and a sibling branch is open with an end this hand could
+// match, that sibling must NOT be on offer. Returns how many times that
+// situation actually came up, so a run that never exercised it can't look like
+// a pass.
+function checkSiblingsStayShut(g: Game, me: EnginePlayer, offered: Move[]): number {
   let checked = 0;
   for (const f of g.pending) {
     const train = g.train(f.train);
@@ -200,18 +235,18 @@ function checkSiblingsStayOpen(g: Game, me: EnginePlayer, offered: Move[]): numb
 }
 
 // One sibling branch beside an open foot. Returns 1 if the situation actually
-// arose — the branch was open, and this hand could have played on it — so the
-// caller can tell "the rule held" apart from "the rule was never tested".
+// arose — the branch was open, and this hand could otherwise have played on it
+// — so the caller can tell "the rule held" apart from "the rule was never
+// tested".
 function checkSibling(
   g: Game, me: EnginePlayer, offered: Move[], f: PendingFoot, train: Train, s: Seg,
 ): number {
   if (s.id === f.seg || s.closed) return 0;
-  if (g.footOn(train.id, s.id)) return 0;               // owes toes of its own
   const playable = me.hand.filter((t) => parse(t).includes(s.end));
   if (!playable.length) return 0;
   for (const tile of playable) {
-    if (!offered.some((m) => m.train === train.id && m.seg === s.id && m.tile === tile)) {
-      fail(`a foot on branch ${f.seg} suppressed ${tile} on open sibling branch ${s.id}`);
+    if (offered.some((m) => m.train === train.id && m.seg === s.id && m.tile === tile)) {
+      fail(`a foot on branch ${f.seg} left ${tile} playable on branch ${s.id} of the same train`);
     }
   }
   return 1;
@@ -270,6 +305,6 @@ function auditChain(s: Seg, claim: (t: TileId) => void): void {
 }
 
 const secs = ((Date.now() - t0) / 1000).toFixed(1);
-if (!siblingChecks) fail('never once saw a foot open beside a playable sibling branch — the fork rule went untested');
+if (!siblingChecks) fail('never once saw a foot open beside a matchable sibling branch — the freeze rule went untested');
 console.log(`soak OK — ${games} games, ${rounds} rounds, ${moves} moves, ${blocked} blocked rounds, ${secs}s`);
 console.log(`  feet: ${feetOpened} opened, ${feetFilled} filled, ${forks} forked trains, ${siblingChecks} sibling-branch checks`);

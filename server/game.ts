@@ -284,6 +284,12 @@ export class Game {
 
   footOn(trainId: TrainId, segId: number): PendingFoot | undefined { return this.pending.find((f) => f.train === trainId && f.seg === segId); }
 
+  // The foot, if any, that has this train frozen. At most one can ever be open
+  // on a train: a toe has to match the double's value, and the only double that
+  // does is the one that opened the foot — so no toe is itself a double, and
+  // nothing else on the train can be played to open a second.
+  footFreezing(trainId: TrainId): PendingFoot | undefined { return this.pending.find((f) => f.train === trainId); }
+
   // Which trains this player may touch, ignoring per-segment detail.
   canPlayOn(player: EnginePlayer, train: Train): boolean {
     if (!player.openingDone) return train.owner === player.id; // first turn: your own train only
@@ -291,21 +297,26 @@ export class Game {
     return train.open;   // a marker exposes EVERY branch of that train
   }
 
+  // The branches of a train that can take a tile at all. An unfilled pigeon foot
+  // freezes the whole train: until the last toe is down, the only branch that
+  // grows is the one owing toes — not the toes already laid, and not branches
+  // that forked off an earlier double. Every other train carries on as normal,
+  // and nobody is ever obliged to feed a foot instead of playing elsewhere.
+  liveSegs(train: Train): Seg[] {
+    const frozen = this.footFreezing(train.id);
+    if (frozen) return train.segs.filter((s) => s.id === frozen.seg);
+    // A branch that has forked is spent; its toes are the live ends now.
+    return train.segs.filter((s) => !s.closed);
+  }
+
   legalMoves(player: EnginePlayer): Move[] {
     if (this.phase !== 'play') return [];
     const moves = [];
     for (const train of this.trains) {
       if (!this.canPlayOn(player, train)) continue;
-
-      // An unfilled pigeon foot freezes only the branch it sits on: that branch
-      // takes toes and nothing else. Sibling branches of the same train — and
-      // every other train — carry on as normal, and nobody is ever obliged to
-      // feed a foot instead of playing elsewhere.
-      for (const s of train.segs) {
-        // A branch that has forked is spent; its toes are the live ends now.
-        if (s.closed) continue;
-        // A branch awaiting toes ends on the double's value, so the ordinary
-        // end-matching test already picks out exactly the tiles that feed it.
+      // A branch awaiting toes ends on the double's value, so the ordinary
+      // end-matching test already picks out exactly the tiles that feed it.
+      for (const s of this.liveSegs(train)) {
         for (const tile of player.hand) {
           const [a, b] = parse(tile);
           if (a === s.end || b === s.end) moves.push({ tile, train: train.id, seg: s.id });
@@ -354,10 +365,14 @@ export class Game {
       if (!p.openingDone) throw new Err('Your first tile must start your own train.');
       throw new Err('That train is closed to you.');
     }
-    // A foot freezes its own branch only — playing anywhere else on the same
-    // train stays legal, so an unfilled foot never holds up the whole line.
+    // An unfilled foot holds up the whole train, so the only branch it leaves
+    // playable is the one owing toes.
     const foot = this.footOn(trainId, segId);   // only ever set when this.foot > 1
-    if (!foot && seg.closed) throw new Err('That branch has already forked.');
+    if (!foot) {
+      const frozen = this.footFreezing(trainId);
+      if (frozen) throw new Err(`That train is frozen until its foot fills — it still wants ${owedPhrase(frozen)}.`);
+      if (seg.closed) throw new Err('That branch has already forked.');
+    }
 
     const attach = seg.end;
     const [a, b] = parse(tile);
@@ -539,6 +554,11 @@ export class Game {
 }
 
 const label = (id: TileId): string => id.replace('-', ' | ');
+// What an open foot is still owed, as a player would say it: "2 more 6s".
+const owedPhrase = (f: PendingFoot): string => {
+  const owed = f.need - f.placed;
+  return `${owed} more ${f.value}${owed === 1 ? '' : 's'}`;
+};
 // Heavy tiles first, grouped by their high end — the order most people fan by.
 const sortTiles = (x: TileId, y: TileId): number => {
   const [a1, b1] = parse(x), [a2, b2] = parse(y);

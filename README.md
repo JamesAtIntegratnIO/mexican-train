@@ -159,8 +159,8 @@ only when you have no legal play anywhere on the table.
 
 With a foot of 2 or 3, a double becomes a branch point that takes that many tiles,
 and **until every toe is down that whole train is frozen** — none of its branches
-can grow, not even ones that already forked. Once the foot fills, the branch forks
-into that many live ends.
+can grow, not the toes already laid and not ones that forked off an earlier double.
+Once the foot fills, the branch forks into that many live ends.
 
 The freeze is per-train, not table-wide. Every other train carries on as normal,
 and you are never forced to feed a foot instead of playing somewhere else. Put your
