@@ -86,6 +86,11 @@ function shuffle<T>(arr: T[], rng: () => number = Math.random): T[] {
   return arr;
 }
 
+/** How long the hunt for the round's double may run before the boneyard is made
+ *  to give it up: three to six times round the table, drawn fresh each round.
+ *  See `floatEngine`. */
+export const HUNT_ROUNDS: [min: number, max: number] = [3, 6];
+
 // Deal sizes always leave a real boneyard — a round with nothing to draw from
 // turns into a slog of forced passes.
 export function handSize(playerCount: number, max: number): number {
@@ -212,6 +217,32 @@ export class Game {
       p.openingDone = false;
     }
     this.boneyard = deck;
+    this.floatEngine();
+  }
+
+  // A deep boneyard can bury the round's double, and nothing at all happens
+  // until it turns up: at two players on a double-12 set it sits about thirty
+  // draws down, which is a quarter of an hour of taking turns to flip a tile
+  // over before the game starts. So if it is further down than the next few
+  // times round the table, it is brought up into that window.
+  //
+  // A ceiling, not a target: a double sitting near the top is left where the
+  // shuffle put it, so a round that would have opened straight away still does,
+  // and it can still turn up on the very first draw. Nothing else moves — every
+  // other tile keeps the order it was dealt — and this only ever touches the
+  // round's own double, so once the engine is down the boneyard is the one the
+  // shuffle made. Hands are never touched: if the double was dealt, there is no
+  // hunt to shorten.
+  floatEngine(rng: () => number = Math.random): void {
+    const at = this.boneyard.indexOf(`${this.engine}-${this.engine}`);
+    if (at < 0) return;
+    const [lo, hi] = HUNT_ROUNDS;
+    const rounds = lo + Math.floor(rng() * (hi - lo + 1));
+    const window = Math.min(rounds * this.players.length, this.boneyard.length);
+    // Drawn from the end, so depth from the top is what says when it turns up.
+    if (this.boneyard.length - 1 - at < window) return;
+    const [tile] = this.boneyard.splice(at, 1);
+    this.boneyard.splice(this.boneyard.length - Math.floor(rng() * window), 0, tile);
   }
 
   layTrains() {

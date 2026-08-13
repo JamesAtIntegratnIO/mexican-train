@@ -359,7 +359,13 @@ by. Everything below the line is chosen by the host in the lobby.
 - 13 rounds for a double-12 set, counting the engine down from 12 to blank.
 - Everything is dealt, engine included. Whoever holds the round's double lays it
   and leads. If nobody was dealt it, players draw one tile each — keeping what
-  they draw — until it turns up.
+  they draw — until it turns up, and the boneyard will not sit on it for longer
+  than three to six times round the table, drawn fresh each round. Buried deeper
+  than that, the double is floated up into that window: at two players on a
+  double-12 set it otherwise sits about thirty draws down, which is a quarter of
+  an hour of taking turns to flip a tile over before anything happens. It is a
+  ceiling and not a target — a double near the top is left where the shuffle put
+  it, so a round can still open on the very first draw.
 - Your first tile must start your own train off the engine.
 - After that: one tile per turn, on your own train, the Mexican Train, or any
   train whose marker is up.

@@ -15,7 +15,7 @@ export function showRules(): void {
     <p class="sub">Set by the host before the deal.</p>
     <div class="rules-list">
       <div><b>The goal</b>Shed all your tiles each round. You score the pips left in your hand${g && g.scoring !== 'pips' ? `, ${g.scoring === 'official' ? 'with blanks at 25 and the double blank at 50' : 'with the double blank costing 50'}` : ''}, and the <em>lowest</em> total after every round wins.</div>
-      <div><b>Starting a round</b>Everything is dealt, engine included. Whoever holds the round's double lays it and leads. If nobody was dealt it, players draw one tile each — keeping what they draw — until it turns up.</div>
+      <div><b>Starting a round</b>Everything is dealt, engine included. Whoever holds the round's double lays it and leads. If nobody was dealt it, players draw one tile each — keeping what they draw — until it turns up. The boneyard won't sit on it for longer than three to six times round the table: buried deeper than that, the double is floated up into that window, so a round never opens with a long stretch of everyone flipping a tile over. It's a ceiling, not a target — one near the top stays where the shuffle put it.</div>
       <div><b>Your first turn</b>You must start your own train with a tile matching the engine. Can't? Draw one; if it still won't go, put your marker up and play moves on.</div>
       <div><b>After that</b>One tile per turn, on your own train, the Mexican Train, or anyone's train whose marker is up.</div>
       <div><b>Markers</b>Yours is entirely your call — raise or lower it whenever it's your turn. While it's up, <em>every branch</em> of your train is fair game for opponents.</div>

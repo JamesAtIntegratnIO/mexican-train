@@ -3,7 +3,7 @@
 //
 //   node dist/scripts/soak.js [gamesPerCombo]
 
-import { Game, parse } from '../server/game.js';
+import { Game, parse, HUNT_ROUNDS } from '../server/game.js';
 import type { EnginePlayer, Seg, Train, PendingFoot } from '../server/game.js';
 import type { TileId, Foot, Scoring, PlayerId, Move } from '../shared/protocol.js';
 import type { BotMove } from '../server/bots.js';
@@ -23,6 +23,7 @@ const fail = (m: string): never => { throw new Error(m); };
 
 let games = 0, rounds = 0, blocked = 0, moves = 0, forks = 0;
 let feetOpened = 0, feetFilled = 0, siblingChecks = 0;
+let hunt = 0, longestHunt = 0, huntedRounds = 0;
 const t0 = Date.now();
 
 // ---------------------------------------------------------------- pigeon feet
@@ -152,10 +153,24 @@ function takeTurn(g: Game, foot: Foot): void {
   checkPosition(g, me, foot);
 
   const mv = chooseMove(g, id);
-  if (mv.type === 'engine') { g.layEngine(id); moves++; return; }
-  if (g.phase === 'seeking') { g.draw(id); moves++; return; }
+  if (mv.type === 'engine') { g.layEngine(id); moves++; checkHunt(g); return; }
+  if (g.phase === 'seeking') { g.draw(id); moves++; hunt++; return; }
   if (mv.type !== 'play' && g.legalMoves(me).length) fail('drew or passed while holding a legal play');
   applyMove(g, id, mv);
+}
+
+// The hunt for the round's double is capped: the boneyard floats it up into the
+// first few times round the table, so no round can open with a long silent
+// stretch of everybody flipping a tile over in turn. Counted in passes, because
+// that is what the wait actually feels like at the table. A ceiling nobody ever
+// reaches is a ceiling that could have gone missing unnoticed, so the longest
+// hunt seen is reported and a run that never had to hunt at all is a failure.
+function checkHunt(g: Game): void {
+  const passes = Math.ceil(hunt / g.players.length);
+  if (passes > HUNT_ROUNDS[1]) fail(`the hunt for the double ran ${passes} times round the table`);
+  if (hunt) huntedRounds++;
+  longestHunt = Math.max(longestHunt, passes);
+  hunt = 0;
 }
 
 function checkPosition(g: Game, me: EnginePlayer, foot: Foot): void {
@@ -306,5 +321,7 @@ function auditChain(s: Seg, claim: (t: TileId) => void): void {
 
 const secs = ((Date.now() - t0) / 1000).toFixed(1);
 if (!siblingChecks) fail('never once saw a foot open beside a matchable sibling branch — the freeze rule went untested');
+if (!huntedRounds) fail('the double was dealt every single time — the cap on the hunt went untested');
 console.log(`soak OK — ${games} games, ${rounds} rounds, ${moves} moves, ${blocked} blocked rounds, ${secs}s`);
 console.log(`  feet: ${feetOpened} opened, ${feetFilled} filled, ${forks} forked trains, ${siblingChecks} sibling-branch checks`);
+console.log(`  engine: ${huntedRounds} rounds hunted for it, longest ${longestHunt} times round the table (cap ${HUNT_ROUNDS[1]})`);
