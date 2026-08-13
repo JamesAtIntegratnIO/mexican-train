@@ -1,0 +1,19 @@
+// Options shared by all three projects. Each target then adds the globals it
+// actually has — Node, the browser, or the Workers runtime — so server code
+// can't reach for `document` and client code can't reach for `process`.
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "strict": true,
+    "noImplicitOverride": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+
+    // Import specifiers keep their `.js` extension even though the file on disk
+    // is `.ts` — the convention TypeScript documents for ESM. tsc, esbuild and
+    // wrangler all resolve it the same way, which is what lets one convention
+    // serve three build paths.
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true
+  }
+}

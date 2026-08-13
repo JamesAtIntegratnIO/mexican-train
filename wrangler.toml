@@ -1,5 +1,5 @@
 name = "mexican-train"
-main = "worker/index.js"
+main = "worker/index.ts"
 compatibility_date = "2025-04-01"
 
 # Every request hits the Worker first so the security headers and /api routing

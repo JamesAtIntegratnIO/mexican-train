@@ -1,0 +1,24 @@
+// The Worker's bindings, as declared in wrangler.toml.
+//
+// Everything optional here is genuinely optional at runtime: a missing rate
+// limiter is handled rather than assumed (see mintAllowed), and the vars all
+// have defaults. Making that optionality explicit is what stops a binding
+// being read as present when the deploy never provided it.
+
+/** Cloudflare's rate limiter binding, narrowed to the one call we make. */
+export interface RateLimiterBinding {
+  limit(options: { key: string }): Promise<{ success: boolean }>;
+}
+
+export interface Env {
+  /** One Durable Object per table. */
+  ROOM: DurableObjectNamespace;
+  /** The static site in public/. */
+  ASSETS: Fetcher;
+  NEW_ROOM_LIMIT?: RateLimiterBinding;
+  CF_VERSION?: { id?: string };
+  EMPTY_GRACE_MIN?: string;
+  IDLE_MIN?: string;
+  LOG_LEVEL?: string;
+  ALLOWED_ORIGINS?: string;
+}

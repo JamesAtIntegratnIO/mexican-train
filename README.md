@@ -5,7 +5,7 @@ accounts, no database — sessions live in memory and vanish when everyone leave
 
 ```bash
 nix develop      # or: direnv allow
-npm install && npm start
+npm install && npm run build && npm start
 ```
 
 The flake pins Node 24, Terraform and jq; wrangler and esbuild come from
@@ -198,54 +198,103 @@ count.
 ## Layout
 
 ```
+shared/
+  protocol.ts   the wire contract — every shape that crosses the socket,
+                checked against all three build targets
 server/
-  game.js       rules engine — pure state and transitions, no I/O
-  bots.js       bot move selection and temperament
-  room-core.js  the table: lobby, membership, bot driver — knows nothing about
+  game.ts       rules engine — pure state and transitions, no I/O
+  bots.ts       bot move selection and temperament
+  room-core.ts  the table: lobby, membership, bot driver — knows nothing about
                 sockets or timers, and is shared by both deployment targets
-  dispatch.js   what a client message means — shared, so the two can't drift
-  log.js        structured logs, shared by both targets
-  rooms.js      Node transport: in-memory registry, real sockets, setTimeout
-  index.js      Node host: composes the two halves, owns the process
-  http.js         the JSON API and the static files
-  sockets.js      the upgrade gate and a socket's lifetime
-  security.js   rate limiting, origin checks, security headers
+  dispatch.ts   what a client message means — shared, so the two can't drift
+  log.ts        structured logs, shared by both targets
+  rooms.ts      Node transport: in-memory registry, real sockets, setTimeout
+  index.ts      Node host: composes the two halves, owns the process
+  http.ts         the JSON API and the static files
+  sockets.ts      the upgrade gate and a socket's lifetime
+  security.ts   rate limiting, origin checks, security headers
 worker/
-  index.js      Cloudflare Worker: assets, /api, socket routing
-  room.js       the Durable Object — one per table, alarms + hibernation
+  index.ts      Cloudflare Worker: assets, /api, socket routing
+  room.ts       the Durable Object — one per table, alarms + hibernation
+  env.ts        the bindings, as declared in wrangler.toml
+client/                                    bundled to public/app.js
+  app.ts       entry — page-level wiring, then go
+  dom.ts         escaping, $, toasts, the modal        ─┐ leaves: import
+  state.ts       everything the client remembers        │ nothing of ours
+  sound.ts       the table noises                      ─┘
+  tiles.ts       how a domino and a player are drawn
+  net.ts         the socket and the reconnect ladder
+  actions.ts     committing a tile
+  lanes.ts       the board — one lane per train, one rail per branch
+  modals.ts      rules, scoreboard, end of round
+  lobby.ts       the pre-game table and its settings
+  hand.ts        your hand: drawing, arranging, tapping
+  turnbar.ts     what the table is waiting for
+  panel.ts       scores, activity, chat
+  table.ts       the shell around all of it
+  session.ts     what a fresh snapshot means
+  entry.ts       the front door and the shared-link gate
 public/
   index.html app shell
   styles.css
-  app.js     client entry — page-level wiring, then go
-  dom.js       escaping, $, toasts, the modal          ─┐ leaves: import
-  state.js     everything the client remembers          │ nothing of ours
-  sound.js     the table noises                        ─┘
-  tiles.js     how a domino and a player are drawn
-  net.js       the socket and the reconnect ladder
-  actions.js   committing a tile
-  lanes.js     the board — one lane per train, one rail per branch
-  modals.js    rules, scoreboard, end of round
-  lobby.js     the pre-game table and its settings
-  table.js     the table chrome, your hand, turn bar, side panel
-  session.js   what a fresh snapshot means
-  entry.js     the front door and the shared-link gate
+  app.js     built from client/ — not checked in, never edit it
 test/
-  server.test.mjs          the Node transport, over real HTTP and sockets
-  durable-object.test.mjs  the Cloudflare transport, against a fake runtime
-  resilience.test.mjs      what a crash costs, in real processes
-  log.test.mjs             log levels, throttling, the table lifecycle line
+  server.test.ts          the Node transport, over real HTTP and sockets
+  durable-object.test.ts  the Cloudflare transport, against a fake runtime
+  resilience.test.ts      what a crash costs, in real processes
+  log.test.ts             log levels, throttling, the table lifecycle line
 scripts/
-  soak.mjs   plays thousands of games and asserts the rules hold
+  soak.ts    plays thousands of games and asserts the rules hold
 ```
 
 ## Tests
 
 ```bash
-npm test          # the suites above, then the soak
-npm run soak -- 5 # more games per rule combination
+npm run dev       # tsx runs the sources, reloads on save — no build
+npm run dev:client # rebuild the client bundle on save, in a second terminal
+npm run build     # tsc -> dist/, esbuild -> public/app.js
+npm test          # builds, then the suites above, then the soak
+npm run types     # all three projects, no emit
 npm run lint      # the complexity gate
+npm run soak -- 5 # more games per rule combination
 npm run check     # everything, plus a wrangler dry run over the Worker config
 ```
+
+The suites run against `dist/`, not the sources — the thing under test should be
+the thing that ships.
+
+## TypeScript
+
+Three projects, because this repo targets three runtimes and they do not share
+globals:
+
+| project | runtime | emits |
+|---|---|---|
+| `tsconfig.json` | Node | `dist/` — what the container runs |
+| `client/tsconfig.json` | the browser | nothing; esbuild bundles it |
+| `worker/tsconfig.json` | Workers | nothing; wrangler bundles it |
+
+Splitting them is what stops `process.env` reaching browser code and `document`
+reaching the server. The Worker project re-checks the files `worker/` imports
+from `server/` under Workers globals, which mechanically enforces the claim
+`room-core.ts` makes about knowing nothing of its host.
+
+Everything is compiled rather than run from source. Node can execute `.ts`
+directly now by stripping types, but stripping only handles erasable syntax — an
+`enum` added a year from now would be a runtime failure in production rather
+than a compile error — and the browser needed a build step regardless.
+
+`shared/protocol.ts` is the contract the two ends previously only implied. It
+compiles to nothing and ships nothing.
+
+Locally, `npm run dev` skips the build entirely — tsx runs the TypeScript
+sources on Node and reloads on save. It does not type-check, so `npm run types`
+is still the thing that says whether the code is sound.
+
+Deliberately still Node rather than bun: the suites assert on signal handling
+and the fault breaker, and the socket upgrade writes raw HTTP bytes before the
+handshake. Those are exactly the places runtimes differ, and a bug that only
+appears in production is the one thing this layout is arranged to avoid.
 
 ## The complexity gate
 

@@ -5,18 +5,22 @@
   "type": "module",
   "description": "Real-time online Mexican Train dominoes. Ephemeral in-memory sessions, share-a-URL joining.",
   "scripts": {
-    "start": "node server/index.js",
-    "dev": "node --watch server/index.js",
-    "test": "node --test test/*.test.mjs && npm run soak",
-    "test:watch": "node --test --watch test/*.test.mjs",
-    "soak": "node scripts/soak.mjs",
+    "build": "npm run build:server && npm run build:client",
+    "build:server": "tsc -p tsconfig.json",
+    "build:client": "esbuild client/app.ts --bundle --format=esm --target=es2022 --sourcemap --outfile=public/app.js",
+    "start": "node dist/server/index.js",
+    "dev": "npm run build:client && tsx watch server/index.ts",
+    "test": "npm run build:server && node --test dist/test/*.test.js && npm run soak",
+    "soak": "node dist/scripts/soak.js",
+    "types": "tsc -p tsconfig.json --noEmit && tsc -p client && tsc -p worker",
     "lint": "eslint .",
-    "check": "npm run lint && npm test && npm run check:worker",
+    "check": "npm run lint && npm run types && npm test && npm run check:worker",
     "check:worker": "wrangler deploy --dry-run --outdir .wrangler/dry-run",
     "cf:dev": "wrangler dev",
     "cf:deploy": "wrangler deploy",
     "tf:plan": "terraform -chdir=terraform plan",
-    "tf:apply": "terraform -chdir=terraform apply"
+    "tf:apply": "terraform -chdir=terraform apply",
+    "dev:client": "esbuild client/app.ts --bundle --format=esm --target=es2022 --sourcemap --outfile=public/app.js --watch"
   },
   "dependencies": {
     "ws": "^8.18.0"
@@ -25,6 +29,13 @@
     "node": ">=24"
   },
   "devDependencies": {
-    "eslint": "^10.8.1"
+    "@cloudflare/workers-types": "^5.20260813.1",
+    "@types/node": "^24.13.3",
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.8.1",
+    "tsx": "^4.23.12",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.67.0"
   }
 }

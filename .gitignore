@@ -11,3 +11,8 @@ terraform/.terraform/
 terraform/backend.hcl
 terraform/*.tfvars
 !terraform/*.tfvars.example
+
+# Build output. public/app.js is bundled from client/ — never edit it.
+dist/
+public/app.js
+public/app.js.map
