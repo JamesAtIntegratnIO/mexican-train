@@ -70,6 +70,25 @@ wouldn't exist in the next. Durable Objects are the exception: they're serverles
 | `EMPTY_GRACE_MIN` | `15` | Minutes with nobody connected before a table is cleared |
 | `IDLE_MIN` | `30` | Minutes with no activity at all before a table is cleared |
 | `MAX_ROOMS` | `500` | Hard cap on concurrent tables |
+| `LOG_LEVEL` | `info` | `error`, `warn`, `info` or `debug` |
+
+### Logs
+
+One JSON object per line on stdout, which is what both hosts collect — Fly into
+its log stream, Workers into the tail that `[observability]` enables. Workers
+Logs bills per line, so the volume is kept deliberately low: **a table costs one
+line**, written when it is cleared, carrying how long it lived and whether a game
+was ever played. Everything else at `info` is the process starting and stopping.
+
+Errors are never silent, but anything a stranger can trigger on repeat — a
+rejected origin, a 429, a flood-closed socket — is collapsed to at most one line
+a minute, with the suppressed count attached to the next one. Otherwise the
+cheapest way to run up a logging bill would be to attack the server. The same
+applies to a fault that recurs, keyed on the error itself so a *different* fault
+still reports immediately.
+
+`LOG_LEVEL=debug` adds a line per join and per table created. Useful locally,
+expensive in production. Hands, chat text and player names are never logged.
 
 ### Session lifetime
 

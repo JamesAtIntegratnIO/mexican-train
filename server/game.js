@@ -178,32 +178,21 @@ export class Game {
     return train.open;   // a marker exposes EVERY branch of that train
   }
 
-  // Every unfilled foot on one train, if that train uses pigeon feet at all.
-  trainFeet(trainId) {
-    return this.foot < 2 ? [] : this.pending.filter((f) => f.train === trainId);
-  }
-
   legalMoves(player) {
     if (this.phase !== 'play') return [];
     const moves = [];
     for (const train of this.trains) {
       if (!this.canPlayOn(player, train)) continue;
 
-      // An unfilled pigeon foot freezes THIS train — none of its branches may
-      // grow until every toe is down. Every other train carries on as normal,
-      // and nobody is ever obliged to feed a foot instead of playing elsewhere.
-      const feet = this.trainFeet(train.id);
-      if (feet.length) {
-        for (const f of feet) {
-          for (const tile of player.hand) {
-            if (parse(tile).includes(f.value)) moves.push({ tile, train: train.id, seg: f.seg });
-          }
-        }
-        continue;
-      }
-
+      // An unfilled pigeon foot freezes only the branch it sits on: that branch
+      // takes toes and nothing else. Sibling branches of the same train — and
+      // every other train — carry on as normal, and nobody is ever obliged to
+      // feed a foot instead of playing elsewhere.
       for (const s of train.segs) {
+        // A branch that has forked is spent; its toes are the live ends now.
         if (s.closed) continue;
+        // A branch awaiting toes ends on the double's value, so the ordinary
+        // end-matching test already picks out exactly the tiles that feed it.
         for (const tile of player.hand) {
           const [a, b] = parse(tile);
           if (a === s.end || b === s.end) moves.push({ tile, train: train.id, seg: s.id });
@@ -240,11 +229,9 @@ export class Game {
       if (!p.openingDone) throw new Err('Your first tile must start your own train.');
       throw new Err('That train is closed to you.');
     }
-    const feet = this.trainFeet(trainId);
+    // A foot freezes its own branch only — playing anywhere else on the same
+    // train stays legal, so an unfilled foot never holds up the whole line.
     const openFoot = this.footOn(trainId, segId);   // only ever set when this.foot > 1
-    if (feet.length && !openFoot) {
-      throw new Err(`Fill the ${feet[0].value} foot on that train before it goes any further.`);
-    }
     if (!openFoot && seg.closed) throw new Err('That branch has already forked.');
 
     const attach = seg.end;
