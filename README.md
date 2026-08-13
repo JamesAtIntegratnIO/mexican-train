@@ -190,15 +190,15 @@ table, how many opened a shared link and how many of those sat down. The
 drop-off is the arithmetic between them.
 
 ```sql
-SELECT toDate(timestamp),
-       sum(_sample_interval),
-       sum(_sample_interval * double3),
-       sumIf(_sample_interval, double6 > 0),
-       sumIf(_sample_interval, double7 = 1)
+SELECT toDate(timestamp) AS day_utc,
+       sum(_sample_interval) AS n_tables,
+       sum(_sample_interval * double3) AS n_people,
+       sumIf(_sample_interval, double6 > 0) AS n_games,
+       sumIf(_sample_interval, double7 = 1) AS n_finished
 FROM mt_tables
 WHERE timestamp > NOW() - INTERVAL '30' DAY
-GROUP BY toDate(timestamp)
-ORDER BY toDate(timestamp)
+GROUP BY day_utc
+ORDER BY day_utc
 ```
 
 Tables cleared, people seated, how many dealt a round, how many finished —
@@ -206,11 +206,15 @@ though **`mt_tables` lags, by design**. A table's row is written when it is
 cleared, and a table with a game in it is held for 12 hours after the last
 person leaves, so tonight's games arrive in tomorrow's data. An empty result
 after an evening of play is the sweeper waiting, not a fault. `mt_funnel` is
-the live half: those rows land as they happen. The
-expression is repeated in `GROUP BY` rather than named with `AS` and grouped by
-the name: aliases are worth avoiding here, both because a short one is easily a
-word the parser has reserved, and because the documentation's own examples
-disagree about whether `GROUP BY` may refer to one.
+the live half: those rows land as they happen.
+
+**`GROUP BY` takes column names and nothing else.** Grouping by a computed
+expression is a 422 — *"in the GROUP BY clause you may only provide column
+names"* — so anything computed has to be aliased in the `SELECT` list and
+grouped by that alias, as `day_utc` is here. The funnel query above needs no
+alias because `index1` is already a column.
+
+And a query that runs is not yet a query that is right — see sampling, below.
 
 `_sample_interval` is not decoration. Past a certain rate Analytics Engine keeps
 one stored row to stand for several real ones, and that column says how many —

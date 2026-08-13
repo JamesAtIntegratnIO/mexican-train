@@ -99,9 +99,11 @@ const explain = (status: number, text: string): string => {
 
 // Counts are sum(_sample_interval), never count(): past a certain rate one
 // stored row stands for several real ones and that column says how many.
-// Aliases are only ever in the SELECT list — GROUP BY repeats the expression,
-// because the documentation's own examples disagree about whether it may refer
-// to an alias.
+//
+// GROUP BY takes column names and nothing else — "in the GROUP BY clause you
+// may only provide column names" is a 422, not a warning. So anything computed
+// has to be aliased in the SELECT list and grouped by that alias; grouping by
+// toDate(timestamp) directly is rejected outright.
 const funnelQuery = (d: number): string => `
 SELECT index1 AS step, sum(_sample_interval) AS n
 FROM mt_funnel
@@ -119,8 +121,8 @@ SELECT toDate(timestamp) AS day_utc,
        sum(_sample_interval * double8) AS n_moves
 FROM mt_tables
 WHERE timestamp > NOW() - INTERVAL '${d}' DAY
-GROUP BY toDate(timestamp)
-ORDER BY toDate(timestamp)`;
+GROUP BY day_utc
+ORDER BY day_utc`;
 
 // ---------------------------------------------------------------- the report
 
