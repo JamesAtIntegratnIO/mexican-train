@@ -12,6 +12,7 @@
     "dev": "npm run build:client && tsx watch server/index.ts",
     "test": "npm run build:server && node --test dist/test/*.test.js && npm run soak",
     "soak": "node dist/scripts/soak.js",
+    "usage": "tsx scripts/usage.ts",
     "types": "tsc -p tsconfig.json --noEmit && tsc -p client && tsc -p worker",
     "lint": "eslint .",
     "check": "npm run lint && npm run types && npm test && npm run check:worker",

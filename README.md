@@ -219,6 +219,33 @@ so a count is `sum(_sample_interval)` rather than `count()`, a total is
 Sampling picks on busy index values, so `mt_funnel` will reach it first and
 `home` will be the value within it.
 
+Or let the script do it:
+
+```bash
+npm run usage                  # the last 30 days
+npm run usage -- --days 7
+npm run usage -- --html usage.html
+```
+
+It runs both queries and reports what they mean rather than what they say — how
+many arrived and left without playing, how many shared links turned into someone
+at the table, what share of tables ever dealt a round and what share of those
+finished. `--html` writes a self-contained page with the same numbers.
+
+It needs an API token with **Account | Account Analytics | Read**, which is *not*
+a permission a deploy token carries, so this is usually a second token. It goes
+in `.env.local` — gitignored, and direnv already loads it:
+
+```bash
+export ANALYTICS_TOKEN="..."
+export CLOUDFLARE_ACCOUNT_ID="..."     # or leave it in terraform/terraform.tfvars
+```
+
+There is deliberately no dashboard route on the Worker. One would mean keeping a
+token that reads the whole account's analytics inside a game that has no
+accounts, and hanging an admin surface off it; a script you run when you want
+the numbers costs nothing and risks nothing.
+
 Both datasets are optional bindings: delete the two
 `[[analytics_engine_datasets]]` blocks from `wrangler.toml` and the app deploys
 and runs exactly as before, counting nothing.
@@ -460,8 +487,10 @@ test/
   lifetime.test.ts        how long a table is held, and who the clock runs for
   log.test.ts             log levels, throttling, the table lifecycle line
   metrics.test.ts         that the usage numbers are true, peaks especially
+  usage.test.ts           the arithmetic the usage report does on them
 scripts/
   soak.ts    plays thousands of games and asserts the rules hold
+  usage.ts   reads the Analytics Engine datasets back and reports them
 ```
 
 ## Tests
