@@ -63,13 +63,23 @@ export const DEFAULT_ENV = {
  *  `/` and asking for `/index.html` gets you a 307 back to it. Serving a shared
  *  link means never handing that redirect to the browser, so the stand-in has
  *  to redirect exactly where the real one does. */
-export const assetEnv = (): Env => ({
+export const assetEnv = (version: string | null = 'dep1oy'): Env => ({
   ...DEFAULT_ENV,
+  CF_VERSION: version ? { id: version } : undefined,
   ASSETS: {
     fetch: async (req: Request): Promise<Response> => {
       const { pathname } = new URL(req.url);
       if (pathname === '/index.html') return new Response(null, { status: 307, headers: { location: '/' } });
-      if (pathname === '/') return new Response('<!doctype html><title>Mexican Train</title>', { headers: { 'content-type': 'text/html; charset=utf-8' } });
+      // Shaped like the real shell: the two files that get version-stamped, an
+      // icon that must not be (a data: URL), and a validator, so a test can
+      // tell a stamped response from a passed-through one.
+      if (pathname === '/') {
+        return new Response(
+          '<!doctype html><title>Mexican Train</title><link rel="icon" href="data:image/svg+xml,%3Csvg/%3E">'
+          + '<link rel="stylesheet" href="/styles.css"><script type="module" src="/app.js"></script>',
+          { headers: { 'content-type': 'text/html; charset=utf-8', etag: '"shell"', 'content-length': '190' } },
+        );
+      }
       if (pathname === '/app.js') return new Response('export {}', { headers: { 'content-type': 'text/javascript; charset=utf-8' } });
       return new Response('Not found', { status: 404 });
     },

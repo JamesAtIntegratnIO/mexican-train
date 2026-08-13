@@ -260,6 +260,22 @@ Both datasets are optional bindings: delete the two
 `[[analytics_engine_datasets]]` blocks from `wrangler.toml` and the app deploys
 and runs exactly as before, counting nothing.
 
+### What a deploy reaches
+
+The shell is never cached and the files it names are cached for an hour, which
+between them used to mean a deploy took up to an hour to reach anyone who had
+played recently — and reached them *badly*, pairing the new `app.js` with the
+previous stylesheet. So the Worker stamps the deployed version onto the shell's
+own `href`/`src` URLs on the way out (`stampAssets` in
+[worker/index.ts](worker/index.ts)): a new deploy is a new URL, and within one
+the URLs are stable so the hour still does its job. The stamped shell drops its
+`etag` and `last-modified`, because a validator that outlives the stamp is the
+same bug wearing a different hat. Nothing is stamped when there is no version
+binding to stamp with — an hour stale beats a shell that doesn't load.
+
+The Node host serves every asset `no-cache` and never had the problem, so it is
+unchanged; it matches on path, so a stamped URL resolves there too.
+
 ### Chat
 
 **Off, and not deployed.** The code is still here, behind `CHAT_ENABLED`, and

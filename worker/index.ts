@@ -183,6 +183,41 @@ async function assetRoute(request: Request, env: Env, url: URL): Promise<Respons
   // Only a file that was actually found is worth an hour in a browser cache. A
   // redirect or a miss cached that long is a mistake you cannot take back.
   out.headers.set('cache-control', isHtml || out.status >= 300 ? 'no-cache' : 'public, max-age=3600');
+  return isHtml && out.status < 300 ? stampAssets(out, env) : out;
+}
+
+/** A root-relative `href`/`src` — the shell's own stylesheet and script, and
+ *  nothing else. The icon is a `data:` URL and the card image is an absolute
+ *  one on a `content` attribute, so neither is matched: somebody else's URL is
+ *  somebody else's cache policy. */
+const ASSET_URL = /\b(href|src)="(\/[^"]*)"/g;
+
+// The shell names `/app.js` and `/styles.css` without a hash, so a deploy
+// changes what is behind those two URLs without changing the URLs themselves,
+// and a browser still holding the previous hour's copy goes on using it. That
+// is worse than either build on its own: a phone that was playing an hour ago
+// gets the new script against the old stylesheet, which is how a change ships
+// green and lands broken.
+//
+// The shell is the one thing never cached, so stamping the deployed version
+// into it is enough — new deploy, new query, new URL, new fetch — while within
+// a deploy the URLs are stable and the hour above still does its job. The
+// assets binding matches on path alone, so the stamp costs the lookup nothing.
+//
+// A string pass rather than HTMLRewriter: this markup is ours, it is under
+// 3KB, and the suites run under Node where that global does not exist. A rule
+// that can only be checked in production is how this got shipped in the first
+// place.
+async function stampAssets(html: Response, env: Env): Promise<Response> {
+  const v = env.CF_VERSION?.id;
+  if (!v) return html;              // nothing to stamp with: an hour stale beats a broken shell
+  const body = (await html.text()).replace(ASSET_URL, (_m, attr, path) => `${attr}="${path}?v=${v}"`);
+  const out = new Response(body, html);
+  // The body is no longer the one the assets binding measured and tagged, and a
+  // validator that outlives the stamp is the very bug this is here to fix: the
+  // browser would revalidate, be told 304, and keep a shell pointing at the
+  // previous deploy's files.
+  for (const h of ['content-length', 'etag', 'last-modified']) out.headers.delete(h);
   return out;
 }
 

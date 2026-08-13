@@ -251,4 +251,38 @@ describe('serving the app', () => {
     assert.equal((await get('/app.js')).headers.get('cache-control'), 'public, max-age=3600');
     assert.equal((await get('/nope.png')).headers.get('cache-control'), 'no-cache');
   });
+
+  // Those two things together are the trap: the shell is always fresh, the
+  // files it names are cached for an hour, and the names never change. A phone
+  // that was playing an hour before a deploy pairs the new script with the old
+  // stylesheet, which is how a change ships green and lands broken.
+  test('the shell names this deploy of the files it points at', async () => {
+    const body = await (await get('/')).text();
+    assert.match(body, /href="\/styles\.css\?v=dep1oy"/);
+    assert.match(body, /src="\/app\.js\?v=dep1oy"/);
+  });
+
+  test('a shared link gets the same stamped shell', async () => {
+    assert.match(await (await get('/g/ABC123')).text(), /src="\/app\.js\?v=dep1oy"/);
+  });
+
+  test('somebody else\'s URL keeps somebody else\'s cache policy', async () => {
+    assert.match(await (await get('/')).text(), /href="data:image\/svg\+xml,%3Csvg\/%3E"/);
+  });
+
+  // A validator that outlives the stamp is the bug wearing a different hat: the
+  // browser revalidates, is told 304, and keeps a shell naming the last deploy.
+  test('a stamped shell carries no validator for its old body', async () => {
+    const r = await get('/');
+    assert.equal(r.headers.get('etag'), null);
+    assert.equal(r.headers.get('content-length'), null);
+  });
+
+  test('no version to stamp with leaves the shell alone rather than breaking it', async () => {
+    const r = await worker.fetch(new Request('https://mexicantrain.example/'), assetEnv(null));
+    const body = await r.text();
+    assert.equal(r.status, 200);
+    assert.match(body, /href="\/styles\.css"/, 'an hour stale beats a shell that does not load');
+    assert.doesNotMatch(body, /\?v=/);
+  });
 });
