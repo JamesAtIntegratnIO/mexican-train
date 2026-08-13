@@ -35,13 +35,28 @@ export function render(): void {
   else renderTable();
 }
 
-// The table's noises: your turn coming round, a tile landing, a foot filling.
+// The table's noises: your turn coming round, a tile landing, a foot filling,
+// a marker going up.
 function soundCues(prev: RoomSnapshot | null, g: GameView): void {
   if (g.turn === S.pid && S.lastTurn !== S.pid) Snd.turn();
   S.lastTurn = g.turn;
   tileCue(g);
   footCue(prev, g);
+  markerCue(prev, g);
 }
+
+// Somebody's marker just went up, so their train is open to the whole table —
+// the one change anyone can act on immediately. Only owned trains count: the
+// Mexican train is open from the start and never raises anything.
+function markerCue(prev: RoomSnapshot | null, g: GameView): void {
+  const raised = openTrains(g);
+  // Nothing to compare against on the first snapshot of a table, so take what
+  // is already up as read rather than announcing all of it at once.
+  const before = prev?.game ? openTrains(prev.game) : raised;
+  if (raised.some((id) => !before.includes(id))) Snd.whistle();
+}
+
+const openTrains = (g: GameView): string[] => g.trains.filter((t) => t.open && t.owner).map((t) => t.id);
 
 function tileCue(g: GameView): void {
   const key = g.lastPlay ? `${g.lastPlay.trainId}:${g.lastPlay.tile}:${g.round}` : null;
