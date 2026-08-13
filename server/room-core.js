@@ -7,6 +7,7 @@
 
 import { Game, Err, maxPlayersFor, handSize } from './game.js';
 import { chooseMove, botName, randomTemper } from './bots.js';
+import { log } from './log.js';
 
 export { Err };
 
@@ -283,9 +284,22 @@ export class Room {
       else if (mv.type === 'draw') g.draw(seat.id);
       else g.pass(seat.id);
     } catch (e) {
-      // Never let a bot wedge the table: give up the turn outright.
-      console.error('bot move failed', e);
-      try { g.pass(seat.id); } catch { g.forceSkip(seat.id); }
+      // A bot only ever picks from legalMoves(), so landing here means the rules
+      // engine contradicted itself — the one bug class worth waking up for.
+      // Log everything needed to rebuild the position, then give up the turn
+      // rather than let a bad move wedge the table.
+      // Throttled by the fault: a position the engine keeps mishandling comes
+      // round again every bot turn, and one line a minute says as much as
+      // hundreds would.
+      log.throttle('error', 'bot_move_failed', {
+        code: this.code, seat: seat.id, phase: g.phase, round: g.roundIndex,
+        boneyard: g.boneyard.length, hand: g.player(seat.id)?.hand.length, err: e,
+      }, `bot:${e?.message}`);
+      try { g.pass(seat.id); }
+      catch (e2) {
+        log.throttle('error', 'bot_pass_failed', { code: this.code, seat: seat.id, err: e2 }, `botpass:${e2?.message}`);
+        g.forceSkip(seat.id);
+      }
     }
     this.tick();
     return true;
@@ -345,6 +359,11 @@ export class Room {
   }
 
   dispose(reason) {
+    log.info('room_disposed', {
+      code: this.code, reason,
+      players: this.players.length, watchers: this.watchers.length,
+      inGame: !!this.game, ageMin: Math.round((Date.now() - this.createdAt) / 60_000),
+    });
     this.adapter.cancelBot?.();
     for (const p of [...this.players, ...this.watchers]) {
       if (!p.conn) continue;

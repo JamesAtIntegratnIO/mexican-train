@@ -144,8 +144,38 @@ body.smalltiles .tile .pips { display: none !important; }
   box-shadow: 0 40px 90px -50px #000, 0 1px 0 rgba(255,255,255,.04) inset;
 }
 .card.wide { max-width: 560px; }
-.logo { display: flex; align-items: center; gap: 12px; justify-content: center; margin-bottom: 4px; }
-.logo h1 { font-size: 27px; font-weight: 800; letter-spacing: -.03em; }
+/* The locomotive rides behind the wordmark rather than beside it, so the title
+   sits on the train. Sized to overhang the text a little on both sides — it
+   reads as a mark that way, not as a picture with a caption. */
+/* The locomotive rides behind the wordmark. It has to be drawn wider than the
+   words or the two collide at the same scale and both turn to mush — overhung
+   on each side, it reads as a backdrop and the title reads as a nameplate on
+   the boiler. min-height must clear the mark's own height (width x 48/72), or
+   the wheels run into whatever follows.
+
+   No drop-shadow here, unlike the table markers: a glow behind text is haze.
+   The pool of light comes from ::before instead, so the train sits in something
+   rather than floating as a flat stain on the card. */
+.logo { position: relative; display: grid; place-items: center; min-height: 158px; margin-bottom: 2px; }
+.logo::before {
+  content: ""; position: absolute; inset: 0;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--gold) 15%, transparent), transparent 72%);
+}
+.logo-mark { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
+.logo-mark svg {
+  width: 226px; height: auto; opacity: .38;
+  /* Lifted off the brand gold: at this alpha the flat gold goes olive. */
+  fill: color-mix(in srgb, var(--gold) 82%, #fff);
+}
+.logo h1 {
+  position: relative; font-size: 27px; font-weight: 800; letter-spacing: -.03em;
+  /* Tight and dark, so the words carry their own ground without smudging it. */
+  text-shadow: 0 2px 4px rgba(6,9,14,.95), 0 0 13px rgba(6,9,14,.92);
+}
+@media (max-width: 420px) {
+  .logo { min-height: 132px; }
+  .logo-mark svg { width: 186px; }
+}
 .tagline { text-align: center; color: var(--dim); font-size: 14.5px; margin-bottom: 26px; }
 .stack { display: grid; gap: 11px; }
 .divider { display: flex; align-items: center; gap: 12px; color: var(--dimmer); font-size: 12px; text-transform: uppercase; letter-spacing: .12em; margin: 20px 0; }
@@ -268,10 +298,6 @@ a { color: var(--dim); }
 .lane.locked .rail .tile { filter: saturate(.66) brightness(.76); box-shadow: 0 1px 2px rgba(0,0,0,.5); }
 .lane.locked .lane-head { opacity: .74; }
 .lane.locked .slot { opacity: .45; }
-
-/* this train has an unfilled foot, so its other branches can't grow yet */
-.rail.frozen .tile { filter: saturate(.72) brightness(.82); }
-.rail.frozen .slot { border-style: dotted; opacity: .5; }
 
 /* ---- spent branches collapse to a small numeral-only trail ---- */
 .rail.closed { cursor: pointer; }

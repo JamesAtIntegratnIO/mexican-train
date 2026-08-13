@@ -12,6 +12,8 @@ const toastEl = document.getElementById('toasts');
 const S = {
   code: null, pid: null, name: localStorage.getItem('mt.name') || '',
   ws: null, room: null, connected: false, retry: 0,
+  direct: null,             // a table we may enter without asking anything more
+
   sel: null, tab: 'scores', panel: false, unread: 0,
   pipMode: localStorage.getItem('mt.pips') === '1',
   expanded: new Set(), spectate: false,
@@ -116,15 +118,36 @@ addEventListener('resize', applyZoom);
 const avatar = (name, i) => `<div class="avatar" style="background:${SEATC[i % SEATC.length]}">${esc((name || '?')[0].toUpperCase())}</div>`;
 
 // The little mini train that gets set on an open train, same as on the table.
-const TRAIN_ICON = `<svg viewBox="0 0 26 17" aria-hidden="true">
-  <rect x="5.1" y="1" width="3.4" height="3.4" rx=".7"/>
-  <rect x="3.4" y="4.2" width="8.6" height="7" rx="1.4"/>
-  <rect x="12" y="1.8" width="7.6" height="9.4" rx="1.4"/>
-  <rect x="14" y="3.6" width="3.6" height="3.4" rx=".6" fill="#0b0e14"/>
-  <rect x="1.4" y="11.4" width="23.2" height="2.4" rx="1.2"/>
-  <circle cx="6.6" cy="15" r="1.9"/><circle cx="13" cy="15" r="1.9"/><circle cx="19.4" cy="15" r="1.9"/>
+// The little locomotive that marks an open train — and, blown up, the brand
+// mark. One drawing has to work at 27px and at 170px, so the silhouette carries
+// it (funnel, boiler, cab, three wheels on one rail) and the detail is cut
+// *through* the shape with fill-rule="evenodd" rather than painted on in the
+// background colour. Real holes mean the cab window and wheel hubs read against
+// any backdrop, at any opacity, instead of only against the one page colour
+// they were once hard-coded to match.
+const TRAIN_ICON = `<svg viewBox="0 0 72 48" aria-hidden="true">
+  <rect x="3" y="32" width="66" height="5" rx="2.5"/>
+  <rect x="7" y="16" width="36" height="16" rx="8"/>
+  <rect x="27" y="11.5" width="8" height="6.5" rx="3.2"/>
+  <rect x="14" y="9" width="6.6" height="8" rx="1"/>
+  <rect x="11.6" y="4.6" width="11.4" height="4.6" rx="1.7"/>
+  <rect x="37.5" y="7.4" width="29" height="5" rx="2.2"/>
+  <path fill-rule="evenodd" d="M43 8h18a3 3 0 0 1 3 3v18a3 3 0 0 1-3 3H43a3 3 0 0 1-3-3V11a3 3 0 0 1 3-3Zm4 7h10a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H47a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2Z"/>
+  <rect x="28.5" y="42.2" width="23" height="2.2" rx="1.1"/>
+  <path fill-rule="evenodd" d="M29.5 34A6 6 0 1 1 29.5 46 6 6 0 1 1 29.5 34Zm0 4.2A1.8 1.8 0 1 1 29.5 41.8 1.8 1.8 0 1 1 29.5 38.2Z"/>
+  <path fill-rule="evenodd" d="M51 34A6 6 0 1 1 51 46 6 6 0 1 1 51 34Zm0 4.2A1.8 1.8 0 1 1 51 41.8 1.8 1.8 0 1 1 51 38.2Z"/>
+  <path fill-rule="evenodd" d="M13 37.2A4.4 4.4 0 1 1 13 46 4.4 4.4 0 1 1 13 37.2Zm0 3A1.4 1.4 0 1 1 13 43.2 1.4 1.4 0 1 1 13 40.2Z"/>
 </svg>`;
 const markerHTML = (color, label) => `<span class="marker" style="--mk:${color}" title="${esc(label)}">${TRAIN_ICON}</span>`;
+
+// The same locomotive as the table markers, blown up as the brand mark and set
+// behind the words. Identical artwork, identical treatment — solid gold with
+// its glow — because the crisp little train is the good-looking one; a faint
+// wash of it just reads as a smudge.
+const LOGO = `<div class="logo">
+  <span class="logo-mark">${TRAIN_ICON}</span>
+  <h1>Mexican Train</h1>
+</div>`;
 
 // ============================================================ networking
 function connect(code) {
@@ -137,7 +160,8 @@ function connect(code) {
     send({ t: 'join', pid: localStorage.getItem('mt.pid.' + code) || null, name: S.name, spectate: S.spectate });
   };
   ws.onmessage = (e) => {
-    const m = JSON.parse(e.data);
+    let m;
+    try { m = JSON.parse(e.data); } catch { return; }   // not ours to make sense of
     if (m.t === 'you') { S.pid = m.pid; localStorage.setItem('mt.pid.' + code, m.pid); return; }
     if (m.t === 'room') return onRoom(m);
     if (m.t === 'error') return toast(m.msg, 'err');
@@ -147,7 +171,14 @@ function connect(code) {
       else { Snd.draw(); toast(m.seeking ? `Drew ${t} — not the engine` : m.playable ? `Drew ${t} — you can play it` : `Drew ${t} — no play, marker up, turn over`); }
       return;
     }
-    if (m.t === 'fatal') { S.ws = null; ws.close(); return fatal(m.msg); }
+    // The server only says this when the table is gone or it turned us away, so
+    // the saved seat is worthless — drop it, or every return trip to this URL
+    // reconnects straight back into the same refusal instead of the join gate.
+    if (m.t === 'fatal') {
+      localStorage.removeItem('mt.pid.' + code);
+      S.ws = null; ws.close();
+      return fatal(m.msg);
+    }
   };
   ws.onclose = () => {
     S.connected = false;
@@ -203,19 +234,29 @@ function onRoom(m) {
 function fatal(msg) {
   S.ws = null; S.room = null;
   app.innerHTML = `<div class="center"><div class="card">
-    <div class="logo">${tileHTML('6-6', 'p mini')}<h1>Mexican Train</h1></div>
+    ${LOGO}
     <p class="tagline" style="margin-top:14px">${esc(msg)}</p>
     <div class="stack"><button class="btn primary big" data-go="home">Start a new game</button></div>
   </div></div>`;
 }
 
-// ============================================================ routing
+// ============================================================ getting to a table
+//
+// Two ways in, and each asks for exactly what it needs and nothing more:
+//
+//   /          name, then start a table or join one by code
+//   /g/CODE    name, and whether you're playing or watching
+//
+// Nobody is asked their name twice. Making a table, or joining a lobby by code,
+// already establishes both answers, so those go straight in; only a bare link
+// reaches the gate, because only then is there a question left to ask.
+
 function route() {
   const m = location.pathname.match(/^\/g\/([A-Za-z0-9]{3,8})$/);
-  if (!m) { S.code = null; S.spectate = false; renderHome(); return; }
+  if (!m) { S.code = null; S.spectate = false; S.direct = null; renderHome(); return; }
   S.code = m[1].toUpperCase();
-  // Already known at this table? Slot straight back into whatever you were.
-  if (localStorage.getItem('mt.pid.' + S.code)) {
+  const known = localStorage.getItem('mt.pid.' + S.code);
+  if (known || S.direct === S.code) {
     S.spectate = localStorage.getItem('mt.role.' + S.code) === 'watch';
     connect(S.code); renderConnecting();
   } else {
@@ -223,61 +264,34 @@ function route() {
   }
 }
 
-// Newcomers choose: take a seat, or watch. Either way they have to say who they are.
-async function renderGate(code) {
-  renderConnecting();
-  let info = null;
-  try { info = await fetch('/api/room/' + code).then((r) => r.json()); } catch {}
-  if (!info || info.error) return fatal('That session has expired or never existed. Start a new one.');
-  const started = info.phase === 'game';
-
-  app.innerHTML = `<div class="center"><div class="card">
-    <div class="logo">${tileHTML('6-6', 'p mini')}<h1>Mexican Train</h1></div>
-    <p class="tagline">Joining table <b style="color:var(--gold);letter-spacing:.14em">${esc(code)}</b>${
-      started ? ' — the game is already under way, so you can watch it.' : `. ${info.players} ${info.players === 1 ? 'person is' : 'people are'} here.`}</p>
-    <div class="stack">
-      <div><div class="label">Your name</div><input id="gname" maxlength="18" placeholder="Who are you?" value="${esc(S.name)}"></div>
-      ${started ? '' : '<button class="btn primary big" id="gplay">Take a seat</button>'}
-      <button class="btn ${started ? 'primary big' : ''}" id="gwatch">Just watch</button>
-    </div>
-    <p class="foot-note">Spectators see the table and the chat, but no one's hand${started ? '' : ', and they can\'t play'}.</p>
-  </div></div>`;
-
-  const nameEl = $('#gname');
-  const enter = (spectate) => {
-    const nm = nameEl.value.trim();
-    if (!nm) { nameEl.focus(); return toast('Enter a name first.', 'err'); }
-    S.name = nm; localStorage.setItem('mt.name', nm);
-    S.spectate = spectate;
-    localStorage.setItem('mt.role.' + code, spectate ? 'watch' : 'play');
-    Snd.ready(); connect(code); renderConnecting();
-  };
-  if ($('#gplay')) $('#gplay').onclick = () => enter(false);
-  $('#gwatch').onclick = () => enter(true);
-  nameEl.onkeydown = (e) => { if (e.key === 'Enter') ($('#gplay') || $('#gwatch')).click(); };
-  nameEl.focus();
-}
-function go(path) { history.pushState({}, '', path); route(); }
-window.addEventListener('popstate', route);
-
-// ============================================================ views
-function render() {
-  if (!S.room) return;
-  if (S.room.phase === 'lobby') renderLobby();
-  else renderTable();
+// Is there a table on the other end of this code, and is it under way?
+async function lookupTable(code) {
+  try {
+    const r = await fetch('/api/room/' + code);
+    const body = await r.json().catch(() => null);
+    if (r.ok && body && !body.error) return { info: body };
+    // A 404 really is a dead table; a 429 or a 500 is not, and saying so beats
+    // telling someone their game vanished when the server was only busy.
+    if (r.status === 404) return { why: 'No table with that code — it may have expired.' };
+    return { why: `${body?.error || 'The server had a problem.'} Try again in a moment.` };
+  } catch {
+    return { why: 'Could not reach the server. Check your connection and try again.' };
+  }
 }
 
-function renderConnecting() {
-  app.innerHTML = `<div class="center"><div class="card" style="text-align:center">
-    <div class="logo">${tileHTML('6-6', 'p mini')}<h1>Mexican Train</h1></div>
-    <p class="tagline" style="margin-top:14px"><span class="spinner" style="display:inline-block;vertical-align:-2px"></span> Joining ${esc(S.code)}…</p>
-  </div></div>`;
+// Remember who we are at this table and open the socket.
+function enterTable(code, name, spectate) {
+  S.name = name; localStorage.setItem('mt.name', name);
+  S.spectate = spectate;
+  S.direct = code;
+  localStorage.setItem('mt.role.' + code, spectate ? 'watch' : 'play');
+  Snd.ready();
 }
 
 function renderHome() {
   S.built = false;
   app.innerHTML = `<div class="center"><div class="card">
-    <div class="logo">${tileHTML('6-6', 'p mini')}<h1>Mexican Train</h1></div>
+    ${LOGO}
     <p class="tagline">Start a table, share the link, play. Nothing to install, nothing saved.</p>
     <div class="stack">
       <div><div class="label">Your name</div><input id="name" maxlength="18" placeholder="Who's playing?" value="${esc(S.name)}"></div>
@@ -293,25 +307,128 @@ function renderHome() {
 
   const nameEl = $('#name'), codeEl = $('#code');
   const keepName = () => { S.name = nameEl.value.trim(); localStorage.setItem('mt.name', S.name); };
+  const requireName = () => {
+    keepName();
+    if (S.name) return true;
+    nameEl.focus(); toast('Enter a name first.', 'err');
+    return false;
+  };
   nameEl.oninput = keepName;
+
   $('#new').onclick = async () => {
-    keepName(); Snd.ready();
+    if (!requireName()) return;
     const btn = $('#new'); btn.disabled = true; btn.textContent = 'Setting the table…';
+    // The server has a real reason for every refusal here — too many tables too
+    // fast, or at capacity. Checking the status is what lets the player see it;
+    // parsing the body blind gives an undefined code and a silent dead button.
+    let msg = 'Could not reach the server.';
     try {
       const r = await fetch('/api/new', { method: 'POST' });
-      const { code } = await r.json();
-      go('/g/' + code);
-    } catch { btn.disabled = false; btn.textContent = 'Start a new game'; toast('Could not reach the server.', 'err'); }
+      const body = await r.json().catch(() => null);
+      if (r.ok && body?.code) {
+        // You named yourself and you're plainly playing — there is nothing left
+        // to ask, so skip the gate and open the lobby.
+        enterTable(body.code, S.name, false);
+        return go('/g/' + body.code);          // go() repaints, so the button goes with it
+      }
+      msg = body?.error || 'Could not start a table — try again.';
+    } catch {}
+    btn.disabled = false; btn.textContent = 'Start a new game';
+    toast(msg, 'err');
   };
-  const doJoin = () => {
-    keepName();
+
+  const doJoin = async () => {
+    if (!requireName()) return;
     const c = codeEl.value.trim().toUpperCase();
-    if (c.length < 3) return toast('Enter the 4-letter code.', 'err');
-    Snd.ready(); go('/g/' + c);
+    if (c.length !== 6) return toast('Table codes are 6 characters.', 'err');
+    const btn = $('#join'); btn.disabled = true;
+    // Checking here means a bad code is a message on this page, rather than a
+    // dead end on a screen the player has to navigate back out of.
+    const { info, why } = await lookupTable(c);
+    btn.disabled = false;
+    if (!info) return toast(why, 'err');
+    // A game already running is the one case with a question left in it: there
+    // may be no seat to take. Let the gate put that choice properly.
+    if (info.phase === 'game') return go('/g/' + c);
+    enterTable(c, S.name, false);
+    go('/g/' + c);
   };
   $('#join').onclick = doJoin;
   codeEl.onkeydown = (e) => { if (e.key === 'Enter') doJoin(); };
   nameEl.onkeydown = (e) => { if (e.key === 'Enter') $('#new').click(); };
+}
+
+// Arriving on a shared link: who are you, and are you playing or watching?
+async function renderGate(code) {
+  renderConnecting(`Looking up ${code}…`);
+  const { info, why } = await lookupTable(code);
+  if (!info) return fatal(why);
+
+  const started = info.phase === 'game';
+  let spectate = started;                      // no seats left to take mid-game
+
+  app.innerHTML = `<div class="center"><div class="card">
+    ${LOGO}
+    <p class="tagline">Joining table <b style="color:var(--gold);letter-spacing:.14em">${esc(code)}</b>${
+      started ? '' : ` · ${info.players} ${info.players === 1 ? 'person' : 'people'} here`}</p>
+    <div class="stack">
+      <div><div class="label">Your name</div><input id="gname" maxlength="18" placeholder="Who are you?" value="${esc(S.name)}"></div>
+      <div>
+        <div class="label">At this table</div>
+        <div class="seg" id="rolepick">
+          <button data-role="play" class="${spectate ? '' : 'on'}" ${started ? 'disabled' : ''}>Take a seat</button>
+          <button data-role="watch" class="${spectate ? 'on' : ''}">Just watch</button>
+        </div>
+        <p class="foot-note" id="rolenote" style="margin-top:8px;text-align:left"></p>
+      </div>
+      <button class="btn primary big" id="genter">Join table</button>
+    </div>
+  </div></div>`;
+
+  const nameEl = $('#gname'), note = $('#rolenote');
+  const paintRole = () => {
+    for (const b of $('#rolepick').children) b.classList.toggle('on', (b.dataset.role === 'watch') === spectate);
+    note.textContent = started
+      ? 'This game is already under way, so there is no seat to take — but you can watch it.'
+      : spectate
+        ? "You'll see the table and the chat, but nobody's hand."
+        : "You'll be dealt a hand and take your turns.";
+  };
+  paintRole();
+
+  $('#rolepick').onclick = (e) => {
+    const b = e.target.closest('button');
+    if (!b || b.disabled) return;
+    spectate = b.dataset.role === 'watch';
+    Snd.tap(); paintRole();
+  };
+  const enter = () => {
+    const nm = nameEl.value.trim();
+    if (!nm) { nameEl.focus(); return toast('Enter a name first.', 'err'); }
+    enterTable(code, nm, spectate);
+    connect(code); renderConnecting();
+  };
+  $('#genter').onclick = enter;
+  nameEl.onkeydown = (e) => { if (e.key === 'Enter') enter(); };
+  nameEl.focus();
+}
+
+function go(path) { history.pushState({}, '', path); route(); }
+window.addEventListener('popstate', route);
+
+// ============================================================ views
+function render() {
+  if (!S.room) return;
+  if (S.room.phase === 'lobby') renderLobby();
+  else renderTable();
+}
+
+function renderConnecting(what) {
+  app.innerHTML = `<div class="center"><div class="card" style="text-align:center">
+    ${LOGO}
+    <p class="tagline" style="margin-top:14px"><span class="spinner" style="display:inline-block;vertical-align:-2px"></span> ${
+      esc(what || `Joining ${S.code}…`)}</p>
+  </div></div>`;
 }
 
 // ---------------------------------------------------------------- lobby
@@ -321,7 +438,7 @@ function renderLobby() {
   const me = r.seats.find((s) => s.id === S.pid);
 
   app.innerHTML = `<div class="center"><div class="card wide">
-    <div class="logo">${tileHTML('6-6', 'p mini')}<h1>Mexican Train</h1></div>
+    ${LOGO}
     <p class="tagline">Send this link to your friends.</p>
 
     <div class="share">
@@ -603,13 +720,9 @@ function paintBranches(el, train, g, live) {
     for (const s of segs) delete S.laneN[train.id + ':' + s.id];
   }
 
-  // While any foot on this train is unfilled, none of its other branches may grow.
-  const hasFoot = segs.some((s) => s.foot);
-
   for (const s of segs) {
     const rail = box.querySelector(`[data-seg="${s.id}"]`);
     if (!rail) continue;
-    rail.classList.toggle('frozen', hasFoot && !s.foot && !s.closed);
     const key = train.id + ':' + s.id;
     const tiles = rail.querySelector('.tiles');
     const had = S.laneN[key] || 0;
@@ -639,9 +752,11 @@ function paintBranches(el, train, g, live) {
     if (!s.closed) {
       slot.classList.toggle('foot', !!s.foot);
       slot.innerHTML = `${s.end}${s.foot ? `<span class="need">${s.foot.placed}/${s.foot.need}</span>` : ''}`;
+      // A foot binds its own branch and nothing else, so the other branches of
+      // this train describe themselves as the ordinary open ends they are.
       slot.title = s.foot
-        ? `${s.foot.need - s.foot.placed} more ${s.foot.value}${s.foot.need - s.foot.placed === 1 ? '' : 's'} to fill this foot — the rest of this train is frozen until then`
-        : rail.classList.contains('frozen') ? 'Frozen until this train\'s foot is filled' : `Open end — needs a ${s.end}`;
+        ? `${s.foot.need - s.foot.placed} more ${s.foot.value}${s.foot.need - s.foot.placed === 1 ? '' : 's'} to fill this foot — this branch takes nothing else until then`
+        : `Open end — needs a ${s.end}`;
     }
     if (isLive) requestAnimationFrame(() => rail.scrollIntoView({ block: 'nearest' }));
   }
@@ -937,7 +1052,7 @@ function showRules() {
       <div><b>After that</b>One tile per turn, on your own train, the Mexican Train, or anyone's train whose marker is up.</div>
       <div><b>Markers</b>Yours is entirely your call — raise or lower it whenever it's your turn. While it's up, <em>every branch</em> of your train is fair game for opponents.</div>
       <div><b>Doubles</b>Never an obligation. A double is just the open end of its branch — match it to carry that branch on, or leave it and play somewhere else entirely. Doubles are laid crosswise.</div>${
-        foot > 1 ? `<div><b>Pigeon foot</b>A double takes <b>${foot} tiles</b>, and until all ${foot} are down <em>that train is frozen</em> — none of its branches can grow, not even ones that already forked. Every other train carries on as normal, and you are never forced to feed a foot instead of playing elsewhere. Once it's full the branch forks into <b>${foot} live ends</b>.</div>` : ''}
+        foot > 1 ? `<div><b>Pigeon foot</b>A double takes <b>${foot} tiles</b>, and until all ${foot} are down <em>that branch takes nothing else</em>. Only that branch — the train's other branches, and every other train, carry on as normal, and you are never forced to feed a foot instead of playing elsewhere. Once it's full the branch forks into <b>${foot} live ends</b>.</div>` : ''}
       <div><b>If you can't play</b>You only draw when you have no legal play anywhere at all. If the drawn tile plays, you must play it. Otherwise end your turn — and put your marker up so the table knows.</div>
       <div><b>The Mexican Train</b>Communal, always open, started by whoever first plays a matching tile on it.</div>
       <div><b>Ending a round</b>Someone plays their last tile, or everyone is blocked with an empty boneyard. Going out on an uncovered double is allowed here.</div>
@@ -1034,6 +1149,21 @@ document.addEventListener('click', () => {
 
 // Browsers keep audio suspended until a real gesture — unlock on the first one.
 addEventListener('pointerdown', () => Snd.ready(), { once: true });
+
+// Most of this file builds the table by writing HTML strings, so a throw part
+// way through leaves a board on screen that looks live and isn't. There is
+// nowhere to report that to, so the least we owe the player is to stop them
+// trusting it. Rate-limited, because one bad render usually means the next one
+// fails too and a stack of identical toasts helps nobody.
+let lastGrumble = 0;
+function surfaceCrash(detail) {
+  console.error(detail);
+  if (Date.now() - lastGrumble < 10_000) return;
+  lastGrumble = Date.now();
+  toast('Something went wrong drawing the table — reload if it looks stuck.', 'err');
+}
+addEventListener('error', (e) => surfaceCrash(e.error || e.message));
+addEventListener('unhandledrejection', (e) => surfaceCrash(e.reason));
 
 applyPipMode();
 applyZoom();

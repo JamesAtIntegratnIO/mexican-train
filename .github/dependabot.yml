@@ -1,0 +1,38 @@
+version: 2
+
+# Two dependencies in total — `ws` and a handful of actions — so this is a
+# handful of PRs a month, not a firehose. Grouped so a quiet week produces one
+# PR rather than four.
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      npm:
+        patterns: ['*']
+    commit-message:
+      prefix: deps
+
+  # Actions are the supply chain with the widest blast radius here: they run
+  # with the Cloudflare deploy token in scope.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        patterns: ['*']
+    commit-message:
+      prefix: ci
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: docker

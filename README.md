@@ -70,6 +70,25 @@ wouldn't exist in the next. Durable Objects are the exception: they're serverles
 | `EMPTY_GRACE_MIN` | `15` | Minutes with nobody connected before a table is cleared |
 | `IDLE_MIN` | `30` | Minutes with no activity at all before a table is cleared |
 | `MAX_ROOMS` | `500` | Hard cap on concurrent tables |
+| `LOG_LEVEL` | `info` | `error`, `warn`, `info` or `debug` |
+
+### Logs
+
+One JSON object per line on stdout, which is what both hosts collect — Fly into
+its log stream, Workers into the tail that `[observability]` enables. Workers
+Logs bills per line, so the volume is kept deliberately low: **a table costs one
+line**, written when it is cleared, carrying how long it lived and whether a game
+was ever played. Everything else at `info` is the process starting and stopping.
+
+Errors are never silent, but anything a stranger can trigger on repeat — a
+rejected origin, a 429, a flood-closed socket — is collapsed to at most one line
+a minute, with the suppressed count attached to the next one. Otherwise the
+cheapest way to run up a logging bill would be to attack the server. The same
+applies to a fault that recurs, keyed on the error itself so a *different* fault
+still reports immediately.
+
+`LOG_LEVEL=debug` adds a line per join and per table created. Useful locally,
+expensive in production. Hands, chat text and player names are never logged.
 
 ### Session lifetime
 
@@ -190,14 +209,71 @@ server/
 worker/
   index.js      Cloudflare Worker: assets, /api, socket routing
   room.js       the Durable Object — one per table, alarms + hibernation
+  log.js        structured logs, shared by both targets
+  dispatch.js   what a client message means — shared, so the two can't drift
 public/
   index.html app shell
   app.js     client — vanilla, no build step
   styles.css
+test/
+  server.test.mjs          the Node transport, over real HTTP and sockets
+  durable-object.test.mjs  the Cloudflare transport, against a fake runtime
+  resilience.test.mjs      what a crash costs, in real processes
+  log.test.mjs             log levels, throttling, the table lifecycle line
+scripts/
+  soak.mjs   plays thousands of games and asserts the rules hold
 ```
 
+## Tests
+
+```bash
+npm test          # the suites above, then the soak
+npm run soak -- 5 # more games per rule combination
+npm run check     # everything, plus a wrangler dry run over the Worker config
+```
+
+No test framework and no test dependencies — `node --test` and the one runtime
+dependency the app already has. The suites run the real entrypoint as a child
+process rather than importing it, because half of what they check (signal
+handling, the fault floor, the bound port) only exists at the process level.
+
+The Cloudflare build gets the same scrutiny as the Node one against a stand-in
+for the Durable Object runtime — storage that persists, sockets that carry an
+attachment across hibernation, and a counter on writes, so "a heartbeat must not
+cost a storage write" is a test rather than a hope. It is the build that serves
+players and the one no local tool otherwise exercises.
+
+`scripts/soak.mjs` is the rules engine's own harness: it plays every combination
+of set size, foot rule, scoring mode and table size, asserting after every turn
+that nothing illegal was offered, that no tile exists twice, and that the pigeon
+foot binds its own branch and no other. It fails if a run never exercises that
+last case, so a green run can't be vacuous.
+
+### CI
+
+`ci.yml` runs on every pull request: tests, the soak, a `wrangler --dry-run` that
+validates the Worker bundle and its bindings without deploying, and a Docker
+build that boots the image and waits for `/api/health`. `deploy.yml` repeats the
+tests before shipping, because `main` can be pushed to directly.
+
+### If a deploy goes wrong
+
+The health check in `deploy.yml` fails the job but does not revert — Workers keeps
+serving the last good version until told otherwise. To go back:
+
+```bash
+npx wrangler deployments list   # find the previous version id
+npx wrangler rollback [<version-id>]
+```
+
+`/api/health` reports the deployed version id, so you can confirm which build is
+answering. On the Node host, redeploy the previous image — sessions are in memory
+and a restart clears every table either way.
+
+---
+
 `game.js` has no dependencies and no side effects, so it can be driven headlessly
-to soak-test rule changes:
+to explore rule changes by hand:
 
 ```bash
 node -e "import('./server/game.js').then(async ({Game}) => {

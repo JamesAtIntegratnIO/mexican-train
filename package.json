@@ -7,11 +7,15 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
+    "test": "node --test test/*.test.mjs && npm run soak",
+    "test:watch": "node --test --watch test/*.test.mjs",
+    "soak": "node scripts/soak.mjs",
+    "check": "npm test && npm run check:worker",
+    "check:worker": "wrangler deploy --dry-run --outdir .wrangler/dry-run",
     "cf:dev": "wrangler dev",
     "cf:deploy": "wrangler deploy",
     "tf:plan": "terraform -chdir=terraform plan",
-    "tf:apply": "terraform -chdir=terraform apply",
-    "soak": "node scripts/soak.mjs"
+    "tf:apply": "terraform -chdir=terraform apply"
   },
   "dependencies": {
     "ws": "^8.18.0"

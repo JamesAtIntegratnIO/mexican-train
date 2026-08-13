@@ -7,6 +7,8 @@
 // means state has to survive eviction, so every mutation is written to storage.
 
 import { Room, Err } from '../server/room-core.js';
+import { dispatch } from '../server/dispatch.js';
+import { log, setLevel } from '../server/log.js';
 
 const STATE_KEY = 'room';
 const BOT_AT = 'botAt';
@@ -15,6 +17,7 @@ export class RoomDO {
   constructor(ctx, env) {
     this.ctx = ctx;
     this.env = env;
+    setLevel(env.LOG_LEVEL);
     this.emptyGraceMs = Number(env.EMPTY_GRACE_MIN || 15) * 60 * 1000;
     this.idleMs = Number(env.IDLE_MIN || 30) * 60 * 1000;
     this.room = null;
@@ -148,41 +151,41 @@ export class RoomDO {
         ws.serializeAttachment({ pid: p.id, spectator: !!p.spectator, tokens: tokens - 1, ts: now });
         this.reply(ws, { t: 'you', pid: p.id });
         this.room.tick();
-        return this.save();
+        return await this.save();
       }
       if (!me) return this.reply(ws, { t: 'error', msg: 'Not joined.' });
-      // Spectators are present and named, but they only get to talk.
-      if (me.spectator && !['chat', 'ping', 'name'].includes(msg.t)) {
-        return this.reply(ws, { t: 'error', msg: "You're watching this game." });
-      }
 
-      switch (msg.t) {
-        case 'name': this.room.rename(me.id, msg.name); break;
-        case 'settings': this.room.setSettings(me.id, msg.settings || {}); break;
-        case 'addBot': this.room.addBot(me.id); break;
-        case 'remove': this.room.removePlayer(me.id, msg.id); break;
-        case 'fillSeat': this.room.fillSeat(me.id, msg.id); break;
-        case 'start': this.room.start(me.id); break;
-        case 'nextRound': this.room.nextRound(me.id); break;
-        case 'playAgain': this.room.playAgain(me.id); break;
-        case 'chat': this.room.chatFrom(me.id, msg.text); break;
-        case 'play': case 'draw': case 'pass': case 'marker': case 'engine': {
-          const r = this.room.act(me.id, msg);
-          if (msg.t === 'draw' && r) this.reply(ws, { t: 'drew', tile: r.tile, playable: r.playable, engine: r.engine, seeking: 'engine' in r });
-          break;
-        }
-        case 'ping': return this.reply(ws, { t: 'pong' });
-      }
+      const { reply, mutated } = dispatch(this.room, me, msg);
+      if (reply) this.reply(ws, reply);
+      // A heartbeat must not cost a storage write per beat.
+      if (!mutated) return;
     } catch (e) {
-      if (e instanceof Err) return this.reply(ws, { t: 'error', msg: e.message });
-      console.error(e);
+      if (e instanceof Err) {
+        // A refused join is terminal — the client has no way to carry on from
+        // it, so end the socket rather than leave it sitting on a spinner.
+        if (msg.t === 'join') {
+          log.throttle('info', 'join_refused', { code: this.room.code, why: e.message });
+          this.reply(ws, { t: 'fatal', msg: e.message });
+          try { ws.close(4005, 'Join refused'); } catch {}
+          return;
+        }
+        return this.reply(ws, { t: 'error', msg: e.message });
+      }
+      // The half-applied change is deliberately left unsaved: the next wake
+      // rebuilds the table from the last good state rather than a broken one.
+      // Keyed by the fault itself, so a client retrying into a bug costs one
+      // line a minute rather than one per attempt.
+      log.throttle('error', 'message_failed', { code: this.room.code, pid: me?.id, t: msg.t, err: e }, `msg:${e?.message}`);
       return this.reply(ws, { t: 'error', msg: 'Something went wrong on the server.' });
     }
     await this.save();
   }
 
   async webSocketClose(ws) { await this.dropped(ws); }
-  async webSocketError(ws) { await this.dropped(ws); }
+  async webSocketError(ws, err) {
+    log.debug('socket_error', { code: this.room?.code, err });
+    await this.dropped(ws);
+  }
 
   async dropped(ws) {
     if (!this.room) return;
