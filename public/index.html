@@ -10,6 +10,22 @@
      cab window and wheel hubs are solid here rather than cut through: at 16px a
      hole is just a dirty pixel, so the tab icon keeps the silhouette only. -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d1117'/%3E%3Cg fill='%23f0b429' transform='translate(-1.3 4.1) scale(.47)'%3E%3Crect x='3' y='32' width='66' height='5' rx='2.5'/%3E%3Crect x='7' y='16' width='36' height='16' rx='8'/%3E%3Crect x='27' y='11.5' width='8' height='6.5' rx='3.2'/%3E%3Crect x='14' y='9' width='6.6' height='8' rx='1'/%3E%3Crect x='11.6' y='4.6' width='11.4' height='4.6' rx='1.7'/%3E%3Crect x='37.5' y='7.4' width='29' height='5' rx='2.2'/%3E%3Crect x='40' y='8' width='24' height='24' rx='3'/%3E%3Ccircle cx='29.5' cy='40' r='6'/%3E%3Ccircle cx='51' cy='40' r='6'/%3E%3Ccircle cx='13' cy='41.6' r='4.4'/%3E%3C/g%3E%3C/svg%3E">
+<!-- What a shared link looks like in Discord, Slack and Messages. They read the
+     Open Graph tags and none of them will render an SVG in an embed, so the
+     locomotive arrives as public/og.png — drawn by scripts/og-image.ts from the
+     same coordinates as the icon above. og:image has to be absolute: a scraper
+     fetches it without a page to resolve a relative path against, so this is
+     the one line in the app that names the host it is deployed to. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Mexican Train">
+<meta property="og:title" content="Mexican Train">
+<meta property="og:description" content="Play Mexican Train dominoes online with friends. Start a session, share the link, play.">
+<meta property="og:image" content="https://mexicantrain.integratn.tech/og.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="A gold locomotive on a rail, on a dark ground">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
