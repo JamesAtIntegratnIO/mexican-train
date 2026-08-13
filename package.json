@@ -10,7 +10,8 @@
     "test": "node --test test/*.test.mjs && npm run soak",
     "test:watch": "node --test --watch test/*.test.mjs",
     "soak": "node scripts/soak.mjs",
-    "check": "npm test && npm run check:worker",
+    "lint": "eslint .",
+    "check": "npm run lint && npm test && npm run check:worker",
     "check:worker": "wrangler deploy --dry-run --outdir .wrangler/dry-run",
     "cf:dev": "wrangler dev",
     "cf:deploy": "wrangler deploy",
@@ -22,5 +23,8 @@
   },
   "engines": {
     "node": ">=24"
+  },
+  "devDependencies": {
+    "eslint": "^10.8.1"
   }
 }

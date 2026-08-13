@@ -61,7 +61,7 @@ export default {
   async fetch(request, env, ctx) {
     setLevel(env.LOG_LEVEL);
     try {
-      return await route(request, env, ctx);
+      return await route(request, env);
     } catch (e) {
       const url = new URL(request.url);
       log.error('request_failed', { path: url.pathname, method: request.method, err: e });
@@ -71,68 +71,77 @@ export default {
   },
 };
 
-async function route(request, env, ctx) {
+function route(request, env) {
   const url = new URL(request.url);
+  if (url.pathname === '/ws') return socketRoute(request, env, url);
+  if (url.pathname.startsWith('/api/')) return apiRoute(request, env, url);
+  return assetRoute(request, env, url);
+}
+
+// Checked identically on sockets and on the API, but refused in each one's own
+// currency — a plain body for an upgrade, JSON for everything else.
+function originOk(request, env, pathname) {
+  if (originAllowed(request, env)) return true;
+  log.throttle('warn', 'origin_denied', { path: pathname, origin: request.headers.get('origin') });
+  return false;
+}
+
+// Every socket for a table goes to the single Durable Object that owns it.
+function socketRoute(request, env, url) {
+  if (request.headers.get('upgrade') !== 'websocket') return new Response('Expected websocket', { status: 426 });
+  if (!originOk(request, env, url.pathname)) return new Response('Forbidden', { status: 403 });
+  const code = (url.searchParams.get('code') || '').toUpperCase();
+  if (!CODE_RE.test(code)) return new Response('Bad code', { status: 400 });
+  return roomStub(env, code).fetch(new Request('https://do/ws', request));
+}
+
+function apiRoute(request, env, url) {
   const { pathname } = url;
+  if (!originOk(request, env, pathname)) return json({ error: 'Bad origin.' }, 403);
 
-  if (pathname === '/ws') {
-    if (request.headers.get('upgrade') !== 'websocket') return new Response('Expected websocket', { status: 426 });
-    if (!originAllowed(request, env)) {
-      log.throttle('warn', 'origin_denied', { path: pathname, origin: request.headers.get('origin') });
-      return new Response('Forbidden', { status: 403 });
-    }
-    const code = (url.searchParams.get('code') || '').toUpperCase();
-    if (!CODE_RE.test(code)) return new Response('Bad code', { status: 400 });
-    return roomStub(env, code).fetch(new Request('https://do/ws', request));
+  if (pathname === '/api/new' && request.method === 'POST') return mintRoom(request, env, pathname);
+  if (pathname === '/api/health') return health(request, env);
+  if (pathname.startsWith('/api/room/')) return roomInfo(env, pathname);
+  return json({ error: 'Not found.' }, 404);
+}
+
+async function mintRoom(request, env, pathname) {
+  // Each table is its own Durable Object, so there's no shared pool to
+  // exhaust — but minting one costs storage, so it is gated per IP.
+  if (!(await mintAllowed(request, env))) {
+    log.throttle('warn', 'rate_limited', { path: pathname, limit: 'new' });
+    return json({ error: "You're making tables too quickly." }, 429);
   }
-
-  if (pathname.startsWith('/api/')) {
-    if (!originAllowed(request, env)) {
-      log.throttle('warn', 'origin_denied', { path: pathname, origin: request.headers.get('origin') });
-      return json({ error: 'Bad origin.' }, 403);
-    }
-
-    if (pathname === '/api/new' && request.method === 'POST') {
-      // Each table is its own Durable Object, so there's no shared pool to
-      // exhaust — but minting one costs storage, so it is gated per IP.
-      if (!(await mintAllowed(request, env))) {
-        log.throttle('warn', 'rate_limited', { path: pathname, limit: 'new' });
-        return json({ error: "You're making tables too quickly." }, 429);
-      }
-      const code = newCode();
-      const res = await roomStub(env, code).fetch(new Request(`https://do/create?code=${code}`));
-      if (!res.ok) {
-        log.error('room_create_failed', { code, status: res.status });
-        return json({ error: 'Could not create a table — try again.' }, 503);
-      }
-      log.debug('room_created', { code });   // room_disposed carries the fuller story
-      return json({ code });
-    }
-
-    if (pathname === '/api/health') {
-      // No room count here, unlike the Node build: every table is its own
-      // Durable Object, so there is no registry to count. The deployed version
-      // is the thing worth reporting — it says which build answered.
-      return json({
-        ok: true,
-        runtime: 'workers',
-        version: env.CF_VERSION?.id || null,
-        colo: request.cf?.colo || null,
-      });
-    }
-
-    if (pathname.startsWith('/api/room/')) {
-      const code = pathname.slice('/api/room/'.length).toUpperCase();
-      if (!CODE_RE.test(code)) return json({ error: 'No such session.' }, 404);
-      const res = await roomStub(env, code).fetch(new Request('https://do/info'));
-      return json(await res.json(), res.status);
-    }
-
-    return json({ error: 'Not found.' }, 404);
+  const code = newCode();
+  const res = await roomStub(env, code).fetch(new Request(`https://do/create?code=${code}`));
+  if (!res.ok) {
+    log.error('room_create_failed', { code, status: res.status });
+    return json({ error: 'Could not create a table — try again.' }, 503);
   }
+  log.debug('room_created', { code });   // room_disposed carries the fuller story
+  return json({ code });
+}
 
-  // Everything else is the single-page app; /g/CODE resolves to index.html.
-  const assetReq = pathname.startsWith('/g/')
+// No room count here, unlike the Node build: every table is its own Durable
+// Object, so there is no registry to count. The deployed version is the thing
+// worth reporting — it says which build answered.
+const health = (request, env) => json({
+  ok: true,
+  runtime: 'workers',
+  version: env.CF_VERSION?.id || null,
+  colo: request.cf?.colo || null,
+});
+
+async function roomInfo(env, pathname) {
+  const code = pathname.slice('/api/room/'.length).toUpperCase();
+  if (!CODE_RE.test(code)) return json({ error: 'No such session.' }, 404);
+  const res = await roomStub(env, code).fetch(new Request('https://do/info'));
+  return json(await res.json(), res.status);
+}
+
+// Everything else is the single-page app; /g/CODE resolves to index.html.
+async function assetRoute(request, env, url) {
+  const assetReq = url.pathname.startsWith('/g/')
     ? new Request(new URL('/index.html', url), request)
     : request;
   const asset = await env.ASSETS.fetch(assetReq);
