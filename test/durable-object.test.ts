@@ -140,6 +140,28 @@ describe('hibernation', () => {
     assert.ok(woken.room.players.some((p) => p.connected), 'no socket was rebound');
   });
 
+  // The flag is deployment config, not table state. If it rode along in storage,
+  // turning chat off would leave every table minted before the deploy talking
+  // until it expired — which is the opposite of what turning it off is for.
+  test('chat does not survive the flag being turned off', async () => {
+    const harness = fakeCtx();
+    const doo = new RoomDO(harness.ctx, { ...DEFAULT_ENV, CHAT_ENABLED: '1' });
+    await settled();
+    await doo.fetch(new Request('https://do/create?code=TESTAB'));
+    const host = harness.connect();
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'join', name: 'Host' }));
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'chat', text: 'hello' }));
+    assert.equal(doo.room!.chat.filter((c) => !c.system).length, 1, 'the flag did not turn chat on');
+
+    // Evicted, and woken by a deploy that no longer runs chat.
+    const woken = new RoomDO(harness.ctx, DEFAULT_ENV);
+    await settled();
+    await woken.webSocketMessage(asWS(host), JSON.stringify({ t: 'chat', text: 'again' }));
+
+    assert.equal(host.last()?.t, 'error');
+    assert.equal(woken.room!.chat.filter((c) => !c.system).length, 1, 'a line landed after the flag went off');
+  });
+
   test('a woken table still answers its sockets', async () => {
     const { ctx, host } = await seatedHost();
     const woken = new RoomDO(ctx, DEFAULT_ENV);

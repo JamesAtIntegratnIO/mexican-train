@@ -168,6 +168,8 @@ export interface WatcherView {
   connected: boolean;
 }
 
+/** The table's own notices — who joined, who left, who a bot took over for —
+ *  and, only where chat is turned on, what players said to each other. */
 export type ChatLine =
   | { system: true; text: string; ts: number }
   | { system?: undefined; from: string; text: string; ts: number };
@@ -183,6 +185,9 @@ export interface RoomSnapshot {
   watchers: WatcherView[];
   spectating: boolean;
   chat: ChatLine[];
+  /** Whether players may talk to each other here. Off unless the deployment
+   *  turned it on, in which case `chat` carries only the table's notices. */
+  chatEnabled: boolean;
   game: GameView | null;
 }
 

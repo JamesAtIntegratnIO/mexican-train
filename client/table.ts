@@ -44,6 +44,7 @@ function buildTable(): void {
 }
 
 function shellHTML(): string {
+  const chat = S.room!.chatEnabled;
   return `<div class="table-view">
     <header class="topbar">
       <div class="engine-badge" id="engine"></div>
@@ -52,7 +53,7 @@ function shellHTML(): string {
       <button class="icon-btn" id="display" title="Tile size &amp; markings">⛭</button>
       <button class="icon-btn" id="mute" title="Sound">${Snd.on ? '🔊' : '🔇'}</button>
       <button class="icon-btn" id="rules" title="Rules">?</button>
-      <button class="icon-btn" id="togglePanel" title="Players &amp; chat">☰</button>
+      <button class="icon-btn" id="togglePanel" title="Players &amp; scores">☰</button>
       <div class="pop" id="displayPop" hidden>
         <div class="label">Tile size</div>
         <div class="zoomrow">
@@ -81,13 +82,13 @@ function shellHTML(): string {
     <aside class="panel" id="panel">
       <div class="panel-head"><h3 id="ptitle">Table</h3><button class="icon-btn" id="closePanel">✕</button></div>
       <div class="tabs" id="tabs">
-        <button data-tab="scores">Scores</button><button data-tab="log">Activity</button><button data-tab="chat">Chat</button>
+        <button data-tab="scores">Scores</button><button data-tab="log">Activity</button>${chat ? '<button data-tab="chat">Chat</button>' : ''}
       </div>
       <div class="panel-body" id="pbody"></div>
-      <form class="chat-form" id="chatForm" hidden>
+      ${chat ? `<form class="chat-form" id="chatForm" hidden>
         <input id="chatInput" maxlength="240" placeholder="Say something…" autocomplete="off">
         <button class="btn sm" type="submit">Send</button>
-      </form>
+      </form>` : ''}
     </aside>
   </div>`;
 }
@@ -138,7 +139,10 @@ function wireControls(): void {
     const b = (e.target as Element).closest<HTMLElement>('[data-tab]');
     if (b) { S.tab = b.dataset.tab as typeof S.tab; paintPanel(); }
   };
-  $<HTMLFormElement>('#chatForm').onsubmit = (e: Event) => {
+  // Absent entirely where chat is off, which is one of the places the shell
+  // genuinely may miss.
+  const form = $<HTMLFormElement>('#chatForm');
+  if (form) form.onsubmit = (e: Event) => {
     e.preventDefault();
     const i = $<HTMLInputElement>('#chatInput');
     if (i.value.trim()) send({ t: 'chat', text: i.value });

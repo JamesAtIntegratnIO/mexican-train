@@ -6,6 +6,7 @@
 import { $, toast } from './dom.js';
 import { S } from './state.js';
 import { Snd } from './sound.js';
+import { seatAt, remember, forget } from './seats.js';
 import type { ClientMessage, ServerMessage, RoomSnapshot, DrewMessage } from '../shared/protocol.js';
 
 /** What the socket hands outward when a message needs the table redrawn. Passed
@@ -25,7 +26,7 @@ export function connect(code: string, newHooks?: Hooks): void {
 
   ws.onopen = () => {
     S.connected = true; S.retry = 0; paintConn();
-    send({ t: 'join', pid: localStorage.getItem('mt.pid.' + code) || null, name: S.name, spectate: S.spectate });
+    send({ t: 'join', pid: seatAt(code), name: S.name, spectate: S.spectate });
   };
   ws.onmessage = (e: MessageEvent) => {
     let m: ServerMessage;
@@ -46,7 +47,7 @@ export function connect(code: string, newHooks?: Hooks): void {
 export const send = (o: ClientMessage): void => { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify(o)); };
 
 function onMessage(m: ServerMessage, code: string, ws: WebSocket): void {
-  if (m.t === 'you') { S.pid = m.pid; localStorage.setItem('mt.pid.' + code, m.pid); return; }
+  if (m.t === 'you') { S.pid = m.pid; remember(code, m.pid); return; }
   if (m.t === 'room') return hooks.room(m);
   if (m.t === 'error') return toast(m.msg, 'err');
   if (m.t === 'drew') return announceDraw(m);
@@ -54,7 +55,7 @@ function onMessage(m: ServerMessage, code: string, ws: WebSocket): void {
   // the saved seat is worthless — drop it, or every return trip to this URL
   // reconnects straight back into the same refusal instead of the join gate.
   if (m.t === 'fatal') {
-    localStorage.removeItem('mt.pid.' + code);
+    forget(code);
     S.ws = null; ws.close();
     return hooks.fatal(m.msg);
   }

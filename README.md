@@ -67,9 +67,11 @@ wouldn't exist in the next. Durable Objects are the exception: they're serverles
 | --- | --- | --- |
 | `PORT` | `3000` | Listen port |
 | `ALLOWED_ORIGINS` | *(same-origin only)* | Comma-separated hosts allowed to call the API and open sockets. Only needed if the front end is served from a different host. |
-| `EMPTY_GRACE_MIN` | `15` | Minutes with nobody connected before a table is cleared |
-| `IDLE_MIN` | `30` | Minutes with no activity at all before a table is cleared |
+| `EMPTY_GRACE_MIN` | `15` | Minutes with nobody connected before an unstarted lobby is cleared |
+| `EMPTY_GRACE_GAME_MIN` | `720` | The same, for a table with a game in it |
+| `MAX_LIFETIME_HOURS` | `24` | Hours from creation before a table is cleared no matter what |
 | `MAX_ROOMS` | `500` | Hard cap on concurrent tables |
+| `CHAT_ENABLED` | `0` | Player-to-player chat. See [Chat](#chat) before turning it on. |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info` or `debug` |
 
 ### Logs
@@ -87,7 +89,7 @@ were ever at it, and whether a game was played and finished. Everything else at
  "peakWatchers":1,"humans":3,"bots":1,"rounds":6,"finished":false,"moves":812}
 ```
 
-`why` is a code (`empty`, `idle`), not the sentence the players are shown — a
+`why` is a code (`empty`, `ceiling`, `evicted`), not the sentence the players are shown — a
 sentence is the right thing to put on someone's screen and the wrong thing to
 group a metric by. The counts are **peaks, not survivors**: a table is cleared
 because everyone left, and a lobby seat is removed the moment its player goes,
@@ -175,12 +177,76 @@ Both datasets are optional bindings: delete the two
 `[[analytics_engine_datasets]]` blocks from `wrangler.toml` and the app deploys
 and runs exactly as before, counting nothing.
 
+### Chat
+
+**Off, and not deployed.** The code is still here, behind `CHAT_ENABLED`, and
+both sides of the flag are tested — but the shipped build has no chat in it.
+
+The reasoning isn't about players being rude to each other; a table is eight
+people who arrived by invitation, and that problem is small and self-policing.
+It's that the properties which make this a nice card game — anyone can mint a
+table in one click, no account, nothing logged, gone within the hour, reachable
+only by a link — are also the exact properties of a disposable private channel.
+Someone can set one up to talk, not to play, and there is nothing on this side
+of the wire that would ever know. Moderation tools don't help with that: they
+address who says what at a table, not what the table is being used for.
+
+So the feature is gone rather than governed. Turning it back on means accepting
+that you are hosting anonymous ephemeral chat rooms with a domino game attached,
+which is a different service with different obligations.
+
+The refusal lives in `Room.chatFrom()` — the only door into the table for a
+chat line — rather than in the client or the socket layer, so a hand-written
+message gets the same answer the missing button does. The flag is read from the
+environment on every wake and never persisted, so a table minted while chat was
+on goes silent as soon as the deploy that turned it off reaches it.
+
+What remains is the table's own notices — *Ana joined*, *Kit is now played by a
+bot* — which the server writes and nobody can put words into. They appear under
+the activity tab.
+
 ### Session lifetime
 
-A game in progress never expires, however long it runs — a full 13 rounds takes
-hours and that's fine. A table is only cleared when **everyone has been gone for
-15 minutes** (the grace covers a locked phone or a wifi blip) or when **nothing at
-all has happened for 30 minutes**. Anyone still connected is told why.
+People play this around work and dinner and bedtime, so a table has to survive
+somebody's evening getting away from them — without turning into something that
+sits on a server for days. How long one is held depends on what is in it:
+
+| What's at the table | Held for |
+| --- | --- |
+| Nobody, no game started | 15 min (`EMPTY_GRACE_MIN`) |
+| Nobody, game in progress | 12 hours (`EMPTY_GRACE_GAME_MIN`) |
+| Anyone at all | until the ceiling |
+| — anything, regardless — | 24 hours from creation (`MAX_LIFETIME_HOURS`) |
+
+An unstarted lobby is a click to recreate. A game five rounds in holds hands
+nobody can reconstruct, so it is held long enough to sleep on. The ceiling is
+the only bound nothing can extend, and it is what keeps "nothing is kept" true.
+
+**There is no idle rule.** A table with people sitting at it is not idle just
+because nobody has moved — that is what waiting for someone looks like — and the
+old 30-minute `IDLE_MIN` cleared lobbies out from under people who were still in
+them. That variable is retired; the ceiling does the job it was really there for
+(stopping a forgotten tab from holding a table open for ever).
+
+**The bot clock stops when the last person leaves.** Every seat reads as absent
+once everyone has gone, so bots used to take the table over and play the game
+out — holding the table open would have been pointless if you came back to a
+finished game. Nothing moves on an empty table.
+
+Somebody who drops mid-turn is waited on for 90 seconds before a bot covers for
+them, and the table says who it's waiting for. A host who knows they aren't
+coming back can hand the seat to a bot immediately.
+
+Getting back in is a seat token in `localStorage`, so tables you still hold a
+seat at are listed on the front page — a game held overnight is no use if the
+link is buried in a group chat.
+
+On Cloudflare, holding a game costs essentially nothing: the Durable Object
+hibernates, the state is a few KB, and the alarm just fires later. On a single
+Node host it is resident memory, so `MAX_ROOMS` becomes the real constraint —
+when it's reached, the oldest empty lobby is dropped to make room. Abandoned
+*games* are never dropped for this: turning someone away beats deleting the
+evening they were coming back to.
 
 ## Security
 
@@ -262,14 +328,19 @@ count.
 - **Joining.** Opening a table's link asks who you are, then offers a seat or a
   spectator slot. Once a game is under way the seat option disappears and only
   watching is left.
-- **Spectators** see the table, the activity log and the chat, but never anyone's
-  hand — the server sends them the public view and rejects every game action.
-  They have to give a name, and the table lists who's watching.
+- **Spectators** see the table and the activity log, but never anyone's hand —
+  the server sends them the public view and rejects every game action. They have
+  to give a name, and the table lists who's watching.
 - **Rejoining.** Your seat is remembered in `localStorage`, so a refresh or a
-  dropped phone puts you back in the same game. While the socket is down a banner
-  says so, because everything on screen is stale until it comes back.
-- **Bots** fill empty seats, and quietly cover for anyone who disconnects after
-  15 seconds so a game never stalls. They hand the seat back when you return.
+  dropped phone puts you back in the same game — and so does coming back
+  tomorrow, since the front page lists the tables you still hold a seat at.
+  While the socket is down a banner says so, because everything on screen is
+  stale until it comes back.
+- **Bots** fill empty seats, and cover for anyone who disconnects mid-turn after
+  90 seconds so a live game never stalls — the table says who it's waiting for
+  meanwhile, and the host can hand the seat over sooner. They give it back when
+  you return. On an empty table nothing moves at all: see
+  [Session lifetime](#session-lifetime).
 - **Bot temperament.** Every bot rolls a hidden disposition from obliging to
   ruthless. A ruthless one will drop a double on your open train to freeze it —
   especially when you're close to going out — while an obliging one will feed
@@ -292,6 +363,7 @@ count.
 shared/
   protocol.ts   the wire contract — every shape that crosses the socket,
                 checked against all three build targets
+  flags.ts      deployment flags, parsed the same way on both hosts
 server/
   game.ts       rules engine — pure state and transitions, no I/O
   bots.ts       bot move selection and temperament
@@ -317,13 +389,14 @@ client/                                    bundled to public/app.js
   sound.ts       the table noises                      ─┘
   tiles.ts       how a domino and a player are drawn
   net.ts         the socket and the reconnect ladder
+  seats.ts       the tables this browser still holds a seat at
   actions.ts     committing a tile
   lanes.ts       the board — one lane per train, one rail per branch
   modals.ts      rules, scoreboard, end of round
   lobby.ts       the pre-game table and its settings
   hand.ts        your hand: drawing, arranging, tapping
   turnbar.ts     what the table is waiting for
-  panel.ts       scores, activity, chat
+  panel.ts       scores and activity
   table.ts       the shell around all of it
   session.ts     what a fresh snapshot means
   entry.ts       the front door and the shared-link gate
@@ -336,6 +409,7 @@ test/
   server.test.ts          the Node transport, over real HTTP and sockets
   durable-object.test.ts  the Cloudflare transport, against a fake runtime
   resilience.test.ts      what a crash costs, in real processes
+  lifetime.test.ts        how long a table is held, and who the clock runs for
   log.test.ts             log levels, throttling, the table lifecycle line
   metrics.test.ts         that the usage numbers are true, peaks especially
 scripts/

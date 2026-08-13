@@ -52,6 +52,24 @@ export interface Adapter {
   onChange?(): void;
 }
 
+/** Deployment settings the table can't work out for itself. Unlike `settings`,
+ *  these are not the host player's to change. */
+export interface RoomOptions {
+  /** Player-to-player chat. Off unless the deployment turns it on. */
+  chat?: boolean;
+}
+
+/** How long a table is held, in milliseconds. The host reads minutes and hours
+ *  from its environment and converts; the room never sees either. */
+export interface Limits {
+  /** Nobody connected and no game started — a click to recreate. */
+  emptyLobbyMs: number;
+  /** Nobody connected, but a game is under way and hands are in it. */
+  emptyGameMs: number;
+  /** From creation, whatever is happening. The one bound nothing extends. */
+  maxLifeMs: number;
+}
+
 
 export { Err };
 
@@ -61,7 +79,12 @@ export const MAX_PLAYERS = 8;
 export const MAX_WATCHERS = 20;
 
 export const BOT_DELAY: readonly [number, number] = [700, 1500];
-export const ABSENT_TAKEOVER_MS = 15000;
+
+// How long the table waits for someone who dropped mid-turn before a bot plays
+// for them. Long enough to be a dead phone or a walk to the door rather than a
+// tunnel blinking, because having your hand played for you is the one thing
+// nobody can undo. A host who knows they aren't coming back has fillSeat().
+export const ABSENT_TAKEOVER_MS = 90_000;
 
 // Rejection sampling off crypto bytes — no modulo bias, and not guessable the
 // way Math.random() codes were. Web Crypto so it runs unchanged on Workers.
@@ -123,7 +146,8 @@ const newStats = (): RoomStats => ({ peakPlayers: 0, peakWatchers: 0, humans: 0,
 // thing to show a player and the wrong thing to group a metric by.
 const CLEARED: Record<ClearedWhy, string> = {
   empty: 'Everyone left this table, so it was cleared.',
-  idle: 'This table sat idle for a while and was cleared. Start a new one.',
+  ceiling: 'This table reached its time limit and was cleared. Start a new one.',
+  evicted: 'This table was cleared to make room on a busy server. Start a new one.',
   other: 'This table was cleared.',
 };
 
@@ -141,13 +165,19 @@ export class Room {
   hostId: PlayerId | null;
   settings: Settings;
   game: Game | null;
+  /** The table's notices, and player talk where chat is turned on. */
   chat: ChatLine[];
   stats: RoomStats;
+  /** Deliberately not persisted, and not in toJSON(): the flag is deployment
+   *  config rather than table state, so turning it off has to take effect on
+   *  tables that are already live rather than being carried by their storage. */
+  chatEnabled: boolean;
 
   // adapter: { send(conn, obj), close(conn, code, reason), scheduleBot(delayMs), cancelBot(), onChange() }
-  constructor(code: string, adapter: Adapter = {}) {
+  constructor(code: string, adapter: Adapter = {}, opts: RoomOptions = {}) {
     this.code = code;
     this.adapter = adapter;
+    this.chatEnabled = !!opts.chat;
     this.createdAt = Date.now();
     this.emptySince = Date.now();
     this.lastActivity = Date.now();
@@ -172,14 +202,26 @@ export class Room {
     };
   }
 
-  static revive(data: any, adapter: Adapter): Room {
-    const r = new Room(data.code, adapter);
-    // Stats are merged over the defaults rather than assigned: a table stored
-    // by the previous deploy has no `stats` at all, or an older shape of one,
-    // and a counter that comes back undefined would poison every sum it lands
-    // in. Missing means zero, which is the truth about a table we weren't
-    // counting yet.
-    Object.assign(r, data, { adapter, game: reviveGame(data.game), stats: { ...r.stats, ...data.stats } });
+  // Two things deliberately survive the assign, for opposite reasons.
+  //
+  // Stats are merged over the defaults rather than replaced: a table stored by
+  // the previous deploy has no `stats` at all, or an older shape of one, and a
+  // counter that comes back undefined would poison every sum it lands in.
+  // Missing means zero, which is the truth about a table we weren't counting
+  // yet.
+  //
+  // chatEnabled is never in `data` and is put back from the flag passed in
+  // here, because it is deployment config rather than table state: a table
+  // stored while chat was on must come back silent once the deploy has turned
+  // it off.
+  static revive(data: any, adapter: Adapter, opts: RoomOptions = {}): Room {
+    const r = new Room(data.code, adapter, opts);
+    Object.assign(r, data, {
+      adapter,
+      game: reviveGame(data.game),
+      stats: { ...r.stats, ...data.stats },
+      chatEnabled: r.chatEnabled,
+    });
     return r;
   }
 
@@ -243,7 +285,15 @@ export class Room {
 
   member(id: PlayerId): Seat | Watcher | undefined { return this.players.find((x) => x.id === id) || this.watchers.find((x) => x.id === id); }
   watcher(id: PlayerId): Watcher | undefined { return this.watchers.find((x) => x.id === id); }
-  anyoneHere(): boolean { return this.players.some((x) => x.connected) || this.watchers.some((x) => x.connected); }
+  // Is a *person* still at this table? Bots are built `connected: true` — they
+  // are never away and their seat is always playable — which meant a table with
+  // one bot in it never registered as empty, so its grace period never started.
+  // The idle rule used to clear those tables by another route; with that gone,
+  // this is the only thing standing between a lobby holding a single bot and a
+  // table that lives until the ceiling with nobody in it.
+  anyoneHere(): boolean {
+    return this.players.some((x) => x.connected && !x.bot) || this.watchers.some((x) => x.connected);
+  }
 
   leave(conn: Conn): void {
     const w = this.watchers.find((x) => x.conn === conn);
@@ -374,6 +424,13 @@ export class Room {
   pendingSeat(): { seat: Seat; delay: number } | null {
     const g = this.game;
     if (!g || g.status !== 'playing') return null;
+    // An empty table has nobody to keep the game moving for. Without this the
+    // clock ran on regardless: every seat reads as absent once the last person
+    // goes, so bots took the whole table over and played it out at a turn every
+    // ninety seconds. Coming back an hour later meant coming back to a game
+    // that had finished without you — which is the opposite of what holding the
+    // table open is for.
+    if (!this.anyoneHere()) return null;
     const seat = this.players.find((x) => x.id === g.current.id);
     if (!seat) return null;
     const absent = !seat.bot && !seat.connected;
@@ -391,6 +448,10 @@ export class Room {
   runBot(): boolean {
     const g = this.game;
     if (!g || g.status !== 'playing') return false;
+    // Checked here and not only in pendingSeat(): scheduling and moving are
+    // different moments, and this is the one that costs somebody their hand.
+    // A cancelled timer that fires anyway must not be able to play the game out.
+    if (!this.anyoneHere()) return false;
     const seat = this.players.find((x) => x.id === g.current.id);
     if (!seat || (!seat.bot && seat.connected)) return false;
     try { this.takeBotTurn(g, seat); }
@@ -435,12 +496,36 @@ export class Room {
 
   // ------------------------------------------------------------------ lifetime
 
-  // A game in play never expires, however long it runs. Answers with the reason
-  // code; clearedMessage() turns that into the sentence the players see.
-  expiry(emptyGraceMs: number, idleMs: number, now = Date.now()): ClearedWhy | null {
-    if (this.emptySince && now - this.emptySince > emptyGraceMs) return 'empty';
-    if (now - this.lastActivity > idleMs) return 'idle';
+  // How long an abandoned table is worth holding, which depends entirely on
+  // what is in it. An untouched lobby is a click to recreate. A game five
+  // rounds in holds hands nobody can reconstruct, and the people who left it
+  // are asleep, at work, or eating dinner — so it is held long enough for a
+  // life to get in the way and short enough that "nothing is kept" stays true.
+  //
+  // There is deliberately no idle rule. A table with people sitting at it is
+  // not idle merely because nobody has moved; that is what waiting for someone
+  // looks like, and clearing it out from under them was a bug. The ceiling is
+  // what stops a forgotten tab holding a table open for ever, and it is the
+  // only promise here that nothing can extend.
+  //
+  // Answers with the reason code; clearedMessage() turns that into the sentence
+  // the players see.
+  expiry(limits: Limits, now = Date.now()): ClearedWhy | null {
+    if (now - this.createdAt > limits.maxLifeMs) return 'ceiling';
+    if (this.emptySince === null) return null;
+    const grace = this.game ? limits.emptyGameMs : limits.emptyLobbyMs;
+    if (now - this.emptySince > grace) return 'empty';
     return null;
+  }
+
+  /** When this table next needs looking at. A host that sweeps on a timer can
+   *  ignore it; one that schedules a single alarm per table cannot work it out
+   *  without knowing these rules, and duplicating them there is how the two
+   *  builds would come to disagree about when a table dies. */
+  expiresAt(limits: Limits): number {
+    const ceiling = this.createdAt + limits.maxLifeMs;
+    if (this.emptySince === null) return ceiling;
+    return Math.min(ceiling, this.emptySince + (this.game ? limits.emptyGameMs : limits.emptyLobbyMs));
   }
 
   // ------------------------------------------------------------------ output
@@ -450,7 +535,11 @@ export class Room {
     if (this.chat.length > 80) this.chat.shift();
   }
 
+  // The refusal lives here rather than in the client or the transport, because
+  // this is the only door: a hand-written socket message reaches the table
+  // through this method or not at all.
   chatFrom(id: PlayerId, text: unknown): void {
+    if (!this.chatEnabled) throw new Err('This table has no chat.');
     const p = this.member(id);
     if (!p) return;
     const body = String(text || '').slice(0, 240).trim();
@@ -486,6 +575,7 @@ export class Room {
       watchers: this.watchers.map((w) => ({ id: w.id, name: w.name, connected: w.connected })),
       spectating: !!this.watcher(forId),
       chat: this.chat.slice(-30),
+      chatEnabled: this.chatEnabled,
       game: this.game ? this.withPresence(this.game.view(forId)) : null,   // an unknown id yields the public view: no hand, no moves
     };
   }

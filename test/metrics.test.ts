@@ -47,7 +47,7 @@ describe('what a finished table reports', () => {
 
   test('a table nobody ever sat at looks nothing like one they left', () => {
     const untouched = new Room('AAAAAA');
-    untouched.dispose('idle');
+    untouched.dispose('ceiling');
     const abandoned = seated(4, 'BBBBBB');
     for (const c of abandoned.conns) abandoned.room.leave(c);
     abandoned.room.dispose('empty');
@@ -61,7 +61,7 @@ describe('what a finished table reports', () => {
     const { room } = seated(1);
     room.addBot(room.hostId!);
     room.addBot(room.hostId!);
-    room.dispose('idle');
+    room.dispose('empty');
     assert.equal(samples[0]!.humans, 1, 'bots must not inflate how many people played');
     assert.equal(samples[0]!.bots, 2);
     assert.equal(samples[0]!.peakPlayers, 3);
@@ -80,7 +80,7 @@ describe('what a finished table reports', () => {
   test('the settings the table actually chose ride along', () => {
     const { room } = seated(2);
     room.setSettings(room.hostId!, { max: 9, foot: 3, scoring: 'pips' });
-    room.dispose('idle');
+    room.dispose('empty');
     assert.equal(samples[0]!.max, 9);
     assert.equal(samples[0]!.foot, 3);
     assert.equal(samples[0]!.scoring, 'pips');
@@ -98,19 +98,25 @@ describe('what a finished table reports', () => {
     const { room } = seated(2);
     const said: any[] = [];
     room.adapter.send = (_c, obj) => said.push(obj);
-    room.dispose('idle');
+    room.dispose('ceiling');
     const fatal = said.find((m) => m.t === 'fatal');
-    assert.match(fatal.msg, /sat idle/, `players were shown ${JSON.stringify(fatal.msg)}`);
+    assert.match(fatal.msg, /time limit/, `players were shown ${JSON.stringify(fatal.msg)}`);
   });
 });
 
 describe('play', () => {
-  // Bots drive this: with the only human gone, the clock plays every seat, so a
-  // real game runs without a test having to know the rules.
+  // Bots drive this: with the human's seat empty, the clock plays every seat, so
+  // a real game runs without a test having to know the rules.
+  //
+  // The watcher is load-bearing. Bots do not play to an empty room — that is
+  // what makes stepping away from a game safe — so somebody has to still be
+  // here for the clock to run at all. A spectator is the cheapest way to be
+  // present without occupying a seat the bots would then refuse to play.
   function playedOut(turns: number) {
     const { room, conns } = seated(1);
     room.addBot(room.hostId!);
     room.start(room.hostId!);
+    room.join({ w: 'looker' }, { name: 'Looker', spectate: true });
     room.leave(conns[0]!);                 // in game, the seat stays and the clock takes it
     let taken = 0;
     while (taken < turns && room.runBot()) taken++;
@@ -125,7 +131,7 @@ describe('play', () => {
 
   test('a table that dealt is not a table that only gathered', () => {
     const { room } = playedOut(20);
-    room.dispose('idle');
+    room.dispose('empty');
     assert.ok(samples[0]!.rounds >= 1, 'a round was played and went unreported');
     assert.equal(samples[0]!.finished, false, 'nobody reached the end of a 13-round game in 20 turns');
     assert.equal(seated(2).room.stats.rounds, 0);
@@ -161,7 +167,7 @@ describe('hibernation', () => {
     const old = Room.revive({ code: 'OLD123', players: [], watchers: [], chat: [] }, {});
     assert.equal(old.stats.peakPlayers, 0);
     assert.equal(old.stats.finished, false);
-    old.dispose('idle');
+    old.dispose('empty');
     for (const [k, v] of Object.entries(samples[0]!)) {
       if (typeof v === 'number') assert.ok(Number.isFinite(v), `${k} came back as ${v}`);
     }

@@ -54,7 +54,9 @@ export function fakeCtx() {
 
 import type { Env } from '../../worker/env.js';
 
-export const DEFAULT_ENV = { EMPTY_GRACE_MIN: '15', IDLE_MIN: '30', LOG_LEVEL: 'error' } as unknown as Env;
+export const DEFAULT_ENV = {
+  EMPTY_GRACE_MIN: '15', EMPTY_GRACE_GAME_MIN: '720', MAX_LIFETIME_HOURS: '24', LOG_LEVEL: 'error',
+} as unknown as Env;
 
 /** An env whose ASSETS binding behaves the way Cloudflare's does by default —
  *  `html_handling: "auto-trailing-slash"`, under which the app shell lives at
