@@ -22,7 +22,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  WRANGLER_VERSION: '4.93.0' # keep in step with deploy.yml and flake.nix
+  WRANGLER_VERSION: '4.123.0' # keep in step with deploy.yml — see the note there
 
 jobs:
   test:
@@ -86,12 +86,22 @@ jobs:
       - name: Build the client bundle
         run: npm run build:client
 
+      # Installed into the project tree rather than run straight through npx,
+      # because installing it is what the deploy does — and it was the install
+      # that broke, not the deploy: wrangler peer-depends on
+      # @cloudflare/workers-types, so a pin that predates the major this project
+      # carries is an ERESOLVE. npx resolves in a cache of its own, which is why
+      # this job stayed green while every deploy failed. Same install, same
+      # failure, one merge earlier.
+      - name: Install the pinned wrangler the way the deploy does
+        run: npm i --no-save wrangler@${{ env.WRANGLER_VERSION }}
+
       # Bundles the Worker and validates wrangler.toml — bindings, migrations,
       # the lot — without deploying. This is the check that would have caught a
       # malformed binding before it reached a deploy, which is exactly how the
       # rate-limit binding got added without local verification.
       - name: Validate the Worker build and bindings
-        run: npx --yes wrangler@${{ env.WRANGLER_VERSION }} deploy --dry-run --outdir "$RUNNER_TEMP/worker-build"
+        run: npx wrangler deploy --dry-run --outdir "$RUNNER_TEMP/worker-build"
         env:
           # A dry run needs no credentials; passing them anyway stops wrangler
           # from trying an interactive login if that ever changes. Absent on
