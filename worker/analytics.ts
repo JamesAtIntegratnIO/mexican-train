@@ -25,11 +25,20 @@
 //              double10 foot
 //
 //   mt_funnel  index1  event
-//              blob1   event
-//              double1 1              — so SUM(double1) reads as a count
+//              blob1   event          — the same string, so a query can select
+//                                       it without depending on the index
+//              double1 1              — one row, one step
 //
 // The index is what Analytics Engine samples and groups by under load, so it
 // holds the one low-cardinality dimension each dataset is most often sliced on.
+//
+// Sampling is why a count over either of these is never COUNT(). Above a certain
+// rate a stored row starts standing for several real ones and `_sample_interval`
+// says how many, so a count is SUM(_sample_interval), a total is
+// SUM(_sample_interval * doubleN), and an average has to weight both halves.
+// mt_funnel is the one that will reach that rate first: it is the highest-volume
+// thing we write, and sampling picks on busy index values, which is exactly what
+// `home` would become.
 
 import { setSink } from '../server/metrics.js';
 import type { TableSample } from '../server/metrics.js';
