@@ -174,15 +174,45 @@ without losing the table rows. The column layout is in
 Analytics Engine has columns by position and not by name. Query it over the
 [SQL API](https://developers.cloudflare.com/analytics/analytics-engine/sql-api/):
 
+These go in the **Query** tab, not the filter box on a dataset's own tab — that
+one takes a bare condition like `index1 = 'home'`, and a full statement pasted
+into it fails on the first keyword it cannot use in an expression.
+
 ```sql
-SELECT toDate(timestamp) AS day,
-       count()                AS tables,
-       sum(double3)           AS people,
-       countIf(double6 > 0)   AS games,
-       countIf(double7 = 1)   AS finished,
-       round(avg(double1))    AS avg_minutes
-FROM mt_tables WHERE timestamp > now() - INTERVAL '30' DAY GROUP BY day ORDER BY day
+SELECT index1, sum(_sample_interval)
+FROM mt_funnel
+WHERE timestamp > NOW() - INTERVAL '7' DAY
+GROUP BY index1
 ```
+
+That is the whole funnel in one result: how many landed, how many started a
+table, how many opened a shared link and how many of those sat down. The
+drop-off is the arithmetic between them.
+
+```sql
+SELECT toDate(timestamp),
+       sum(_sample_interval),
+       sum(_sample_interval * double3),
+       sumIf(_sample_interval, double6 > 0),
+       sumIf(_sample_interval, double7 = 1)
+FROM mt_tables
+WHERE timestamp > NOW() - INTERVAL '30' DAY
+GROUP BY toDate(timestamp)
+ORDER BY toDate(timestamp)
+```
+
+Tables cleared, people seated, how many dealt a round, how many finished. The
+expression is repeated in `GROUP BY` rather than named with `AS` and grouped by
+the name: aliases are worth avoiding here, both because a short one is easily a
+word the parser has reserved, and because the documentation's own examples
+disagree about whether `GROUP BY` may refer to one.
+
+`_sample_interval` is not decoration. Past a certain rate Analytics Engine keeps
+one stored row to stand for several real ones, and that column says how many —
+so a count is `sum(_sample_interval)` rather than `count()`, a total is
+`sum(_sample_interval * doubleN)`, and an average has to weight both halves.
+Sampling picks on busy index values, so `mt_funnel` will reach it first and
+`home` will be the value within it.
 
 Both datasets are optional bindings: delete the two
 `[[analytics_engine_datasets]]` blocks from `wrangler.toml` and the app deploys
