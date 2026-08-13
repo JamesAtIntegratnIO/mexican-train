@@ -3,6 +3,7 @@
 // one port.
 
 import fs from 'node:fs';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { rooms, createRoom, MAX_ROOMS } from './rooms.js';
@@ -10,27 +11,31 @@ import { Err } from './game.js';
 import { log } from './log.js';
 import { clientIp, originAllowed, rateLimiter, securityHeaders } from './security.js';
 
-const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
+// Resolved from the compiled location, not the source one: this file runs as
+// dist/server/http.js, so the repo root — and the public/ that sits beside
+// dist/ in both the checkout and the container — is two levels up.
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const PUBLIC = path.join(ROOT, 'public');
 
-const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.ico': 'image/x-icon' };
+const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.ico': 'image/x-icon' };
 
 // Creating a table allocates memory that lives for a while; looking one up is
 // how you'd sweep for codes. Both are throttled per IP.
 const newRoomLimit = rateLimiter({ capacity: 5, perSec: 1 / 30 });   // ~2/min sustained
 const lookupLimit = rateLimiter({ capacity: 30, perSec: 1 });
 
-export const json = (res, req, status, body) => {
+export const json = (res: ServerResponse, req: IncomingMessage, status: number, body: unknown): void => {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...securityHeaders(req, false) });
   res.end(JSON.stringify(body));
 };
 
-export function handleRequest(req, res) {
-  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
+  const url = new URL(req.url ?? '/', `http://${req.headers.host || 'localhost'}`);
   if (url.pathname.startsWith('/api/')) return api(req, res, url);
   return serveAsset(req, res, url);
 }
 
-function api(req, res, url) {
+function api(req: IncomingMessage, res: ServerResponse, url: URL): void {
   if (!originAllowed(req)) {
     log.throttle('warn', 'origin_denied', { path: url.pathname, origin: req.headers.origin });
     return json(res, req, 403, { error: 'Bad origin.' });
@@ -45,7 +50,7 @@ function api(req, res, url) {
   return json(res, req, 404, { error: 'Not found.' });
 }
 
-function mintRoom(req, res, url, ip) {
+function mintRoom(req: IncomingMessage, res: ServerResponse, url: URL, ip: string): void {
   if (!newRoomLimit(ip)) {
     log.throttle('warn', 'rate_limited', { path: url.pathname, limit: 'new' }, 'rl:new');
     return json(res, req, 429, { error: "You're making tables too quickly." });
@@ -59,7 +64,7 @@ function mintRoom(req, res, url, ip) {
   }
 }
 
-function roomInfo(req, res, url, ip) {
+function roomInfo(req: IncomingMessage, res: ServerResponse, url: URL, ip: string): void {
   if (!lookupLimit(ip)) {
     log.throttle('warn', 'rate_limited', { path: url.pathname, limit: 'lookup' }, 'rl:lookup');
     return json(res, req, 429, { error: 'Slow down.' });
@@ -72,7 +77,7 @@ function roomInfo(req, res, url, ip) {
 
 // Everything that isn't the API is the single-page app; /g/CODE resolves to
 // index.html so a shared link opens the table rather than a 404.
-function serveAsset(req, res, url) {
+function serveAsset(req: IncomingMessage, res: ServerResponse, url: URL): void {
   const rel = url.pathname === '/' || url.pathname.startsWith('/g/') ? '/index.html' : url.pathname;
   const file = path.join(PUBLIC, path.normalize(rel).replace(/^(\.\.[/\\])+/, ''));
   if (!file.startsWith(PUBLIC)) return json(res, req, 403, { error: 'Nope.' });

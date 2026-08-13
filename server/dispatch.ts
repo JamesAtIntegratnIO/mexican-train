@@ -10,6 +10,13 @@
 // closure variable on Node, a socket attachment in the Durable Object).
 
 import { Err } from './room-core.js';
+import type { Room, Seat, Watcher } from './room-core.js';
+import type { ClientMessage, ServerMessage } from '../shared/protocol.js';
+
+export interface Dispatched {
+  reply: ServerMessage | null;
+  mutated: boolean;
+}
 
 // Spectators are present and named, but they only get to talk.
 export const SPECTATOR_OK = ['chat', 'ping', 'name'];
@@ -24,7 +31,7 @@ export const SPECTATOR_OK = ['chat', 'ping', 'name'];
  * Throws Err for anything the player did wrong; the caller turns that into a
  * message they can read.
  */
-export function dispatch(room, me, msg) {
+export function dispatch(room: Room, me: Seat | Watcher, msg: ClientMessage): Dispatched {
   if (me.spectator && !SPECTATOR_OK.includes(msg.t)) throw new Err("You're watching this game.");
 
   switch (msg.t) {

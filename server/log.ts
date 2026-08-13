@@ -21,31 +21,37 @@
 // Deliberately not logged: hands, chat bodies, player names. Ids are enough to
 // follow a bug across lines and none of the rest would help.
 
-const LEVELS = { error: 0, warn: 1, info: 2, debug: 3 };
+export type Level = 'error' | 'warn' | 'info' | 'debug';
+
+/** Anything worth attaching to a line. `err` is pulled out and unpacked by
+ *  errFields(); everything else is copied through as-is. */
+export type Fields = Record<string, unknown> | undefined;
+
+const LEVELS: Record<Level, number> = { error: 0, warn: 1, info: 2, debug: 3 };
 let threshold = LEVELS.info;
 
 // Node reads LOG_LEVEL from the environment, the Worker from its vars; both
 // call this at boot. An unknown name leaves the default alone rather than
 // silently muting the logs.
-export function setLevel(name) {
-  if (name && Object.hasOwn(LEVELS, name)) threshold = LEVELS[name];
-  return Object.keys(LEVELS)[threshold];
+export function setLevel(name?: string): string {
+  if (name && Object.hasOwn(LEVELS, name)) threshold = LEVELS[name as Level];
+  return Object.keys(LEVELS)[threshold]!;
 }
 
 // Errors don't survive JSON.stringify — keep the parts worth having. The stack
 // is trimmed because the frames past the throw site are the same every time.
-const errFields = (e) =>
+const errFields = (e: unknown): Record<string, string> =>
   e instanceof Error
     ? { err: e.message, stack: (e.stack || '').split('\n').slice(1, 5).map((s) => s.trim()).join(' | ') }
     : { err: String(e) };
 
-function emit(level, evt, fields) {
+function emit(level: Level, evt: string, fields?: Fields): void {
   if (LEVELS[level] > threshold) return;
   const { err, ...rest } = fields || {};
   const line = { ts: new Date().toISOString(), level, evt, ...rest, ...(err === undefined ? {} : errFields(err)) };
   // Logging must never be the thing that breaks a request, so a value that
   // won't serialise costs us that one field, not the line.
-  let text;
+  let text: string;
   try { text = JSON.stringify(line); } catch { text = JSON.stringify({ ts: line.ts, level, evt, unserialisable: true }); }
   (LEVELS[level] <= LEVELS.warn ? console.error : console.log)(text);
 }
@@ -60,9 +66,9 @@ function emit(level, evt, fields) {
 // No timers: a Durable Object between messages isn't running, and a pending
 // flush would be a reason to keep it awake.
 const WINDOW_MS = 60_000;
-const windows = new Map();      // key -> { since, held, last }
+const windows = new Map<string, { since: number; held: number; last: Fields }>();
 
-function throttle(level, evt, fields, key = evt) {
+function throttle(level: Level, evt: string, fields?: Fields, key: string = evt): void {
   const now = Date.now();
   const w = windows.get(key);
   if (w && now - w.since < WINDOW_MS) { w.held++; w.last = fields; return; }
@@ -75,10 +81,10 @@ function throttle(level, evt, fields, key = evt) {
 }
 
 export const log = {
-  error: (evt, fields) => emit('error', evt, fields),
-  warn: (evt, fields) => emit('warn', evt, fields),
-  info: (evt, fields) => emit('info', evt, fields),
-  debug: (evt, fields) => emit('debug', evt, fields),
+  error: (evt: string, fields?: Fields) => emit('error', evt, fields),
+  warn: (evt: string, fields?: Fields) => emit('warn', evt, fields),
+  info: (evt: string, fields?: Fields) => emit('info', evt, fields),
+  debug: (evt: string, fields?: Fields) => emit('debug', evt, fields),
   // Same levels, but at most one line a minute per `key`. Use for anything a
   // stranger can trigger on repeat, and for faults that recur every turn.
   throttle,

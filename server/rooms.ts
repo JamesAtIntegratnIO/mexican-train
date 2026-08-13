@@ -1,7 +1,9 @@
 // Node transport for Room: an in-memory registry, real sockets, and setTimeout.
 // All the table logic lives in room-core.js, shared with the Cloudflare build.
 
+import type { WebSocket } from 'ws';
 import { Room, Err, newCode } from './room-core.js';
+import type { Adapter, Conn } from './room-core.js';
 import { log } from './log.js';
 
 export { Err };
@@ -12,27 +14,30 @@ export const MAX_ROOMS = process.env.MAX_ROOMS ? Number(process.env.MAX_ROOMS) :
 const EMPTY_GRACE_MS = Number(process.env.EMPTY_GRACE_MIN || 15) * 60 * 1000;
 const IDLE_MS = Number(process.env.IDLE_MIN || 30) * 60 * 1000;
 
-export const rooms = new Map();
+export const rooms = new Map<string, Room>();
 
 // Connections are the WebSocket objects themselves here — the core only ever
 // hands them back to us, so they can be anything.
-function nodeAdapter(getRoom) {
-  let timer = null;
+function nodeAdapter(getRoom: () => Room): Adapter {
+  let timer: NodeJS.Timeout | null = null;
   return {
-    send(ws, obj) {
+    // The core hands back whatever it was given, so this is the one place that
+    // knows a connection is really a ws socket.
+    send(conn: Conn, obj: unknown) {
+      const ws = conn as WebSocket;
       if (!ws || ws.readyState !== 1) return;
       try { ws.send(JSON.stringify(obj)); } catch {}
     },
-    close(ws, code, reason) { try { ws.close(code, reason); } catch {} },
-    cancelBot() { clearTimeout(timer); timer = null; },
-    scheduleBot(delay) {
-      clearTimeout(timer);
+    close(conn: Conn, code: number, reason: string) { try { (conn as WebSocket).close(code, reason); } catch {} },
+    cancelBot() { if (timer) clearTimeout(timer); timer = null; },
+    scheduleBot(delay: number) {
+      if (timer) clearTimeout(timer);
       timer = setTimeout(() => { timer = null; getRoom().runBot(); }, delay);
     },
   };
 }
 
-export function createRoom() {
+export function createRoom(): Room {
   if (rooms.size >= MAX_ROOMS) {
     // Being full means every further attempt lands here, so throttle it.
     log.throttle('warn', 'at_capacity', { rooms: rooms.size, max: MAX_ROOMS });
@@ -40,7 +45,7 @@ export function createRoom() {
   }
   let code;
   do { code = newCode(); } while (rooms.has(code));
-  let room;
+  let room: Room;
   room = new Room(code, nodeAdapter(() => room));
   rooms.set(code, room);
   // Debug, not info: room_disposed tells the same story and more — how long the
@@ -52,7 +57,7 @@ export function createRoom() {
 
 // Sweep abandoned rooms so memory stays flat. A table in active play is never
 // touched, however long the game runs.
-export function sweep(now = Date.now()) {
+export function sweep(now = Date.now()): number {
   let removed = 0;
   for (const [code, room] of rooms) {
     const reason = room.expiry(EMPTY_GRACE_MS, IDLE_MS, now);

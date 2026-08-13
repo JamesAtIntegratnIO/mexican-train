@@ -6,7 +6,11 @@
 import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { RoomDO } from '../worker/room.js';
-import { fakeCtx, DEFAULT_ENV, settled } from './helpers/durable-object.js';
+import { fakeCtx, DEFAULT_ENV, settled, FakeWS } from './helpers/durable-object.js';
+
+/** RoomDO takes runtime WebSockets; FakeWS implements the handful of methods it
+ *  actually calls, so it is handed over explicitly rather than by accident. */
+const asWS = (ws: FakeWS) => ws as unknown as WebSocket;
 
 async function freshTable(code = 'TESTAB') {
   const harness = fakeCtx();
@@ -20,7 +24,7 @@ async function freshTable(code = 'TESTAB') {
 async function seatedHost(code = 'TESTAB') {
   const t = await freshTable(code);
   const host = t.connect();
-  await t.doo.webSocketMessage(host, JSON.stringify({ t: 'join', name: 'Host' }));
+  await t.doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'join', name: 'Host' }));
   return { ...t, host };
 }
 
@@ -34,7 +38,7 @@ describe('routing', () => {
 
   test('info describes the table without leaking it', async () => {
     const { doo } = await seatedHost();
-    const info = await doo.fetch(new Request('https://do/info')).then((r) => r.json());
+    const info: any = await doo.fetch(new Request('https://do/info')).then((r) => r.json());
     assert.equal(info.code, 'TESTAB');
     assert.equal(info.phase, 'lobby');
     assert.equal(info.players, 1);
@@ -50,33 +54,33 @@ describe('routing', () => {
 describe('joining', () => {
   test('a join is answered, stamped on the socket, and persisted', async () => {
     const { host, store } = await seatedHost();
-    const you = host.find('you');
+    const you = (host.find('you') as any);
     assert.ok(you?.pid);
-    assert.equal(host.att?.pid, you.pid, 'the socket must carry its identity across hibernation');
-    assert.equal(store.get('room').players.length, 1);
+    assert.equal((host.att as any)?.pid, you.pid, 'the socket must carry its identity across hibernation');
+    assert.equal((store.get('room') as any).players.length, 1);
   });
 
   test('a refused join is fatal and closes the socket', async () => {
     const { doo, connect, host } = await seatedHost();
-    await doo.webSocketMessage(host, JSON.stringify({ t: 'addBot' }));
-    await doo.webSocketMessage(host, JSON.stringify({ t: 'start' }));
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'addBot' }));
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'start' }));
 
     const late = connect();
-    await doo.webSocketMessage(late, JSON.stringify({ t: 'join', name: 'Latecomer' }));
+    await doo.webSocketMessage(asWS(late), JSON.stringify({ t: 'join', name: 'Latecomer' }));
     assert.equal(late.last()?.t, 'fatal');
     assert.equal(late.closed?.code, 4005);
   });
 
   test('a spectator may join a running game but not play', async () => {
     const { doo, connect, host } = await seatedHost();
-    await doo.webSocketMessage(host, JSON.stringify({ t: 'addBot' }));
-    await doo.webSocketMessage(host, JSON.stringify({ t: 'start' }));
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'addBot' }));
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'start' }));
 
     const watcher = connect();
-    await doo.webSocketMessage(watcher, JSON.stringify({ t: 'join', name: 'Nosy', spectate: true }));
-    assert.ok(watcher.find('you'));
-    await doo.webSocketMessage(watcher, JSON.stringify({ t: 'start' }));
-    assert.equal(watcher.last()?.msg, "You're watching this game.");
+    await doo.webSocketMessage(asWS(watcher), JSON.stringify({ t: 'join', name: 'Nosy', spectate: true }));
+    assert.ok((watcher.find('you') as any));
+    await doo.webSocketMessage(asWS(watcher), JSON.stringify({ t: 'start' }));
+    assert.equal((watcher.last() as any)?.msg, "You're watching this game.");
   });
 });
 
@@ -87,15 +91,15 @@ describe('storage writes', () => {
   test('a real action is persisted', async () => {
     const { doo, host, counts, store } = await seatedHost();
     const before = counts.puts;
-    await doo.webSocketMessage(host, JSON.stringify({ t: 'addBot' }));
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'addBot' }));
     assert.ok(counts.puts > before, 'seating a bot was not persisted');
-    assert.equal(store.get('room').players.length, 2);
+    assert.equal((store.get('room') as any).players.length, 2);
   });
 
   test('a heartbeat costs nothing', async () => {
     const { doo, host, counts } = await seatedHost();
     const before = counts.puts;
-    for (let i = 0; i < 20; i++) await doo.webSocketMessage(host, JSON.stringify({ t: 'ping' }));
+    for (let i = 0; i < 20; i++) await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'ping' }));
     assert.equal(counts.puts, before, `20 pings cost ${counts.puts - before} writes`);
     assert.equal(host.last()?.t, 'pong', 'but they must still be answered');
   });
@@ -103,16 +107,16 @@ describe('storage writes', () => {
   test('an unknown verb costs nothing', async () => {
     const { doo, host, counts } = await seatedHost();
     const before = counts.puts;
-    await doo.webSocketMessage(host, JSON.stringify({ t: 'nonsense-verb' }));
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'nonsense-verb' }));
     assert.equal(counts.puts, before);
   });
 
   test('a rejected action costs nothing', async () => {
     const { doo, host, counts } = await seatedHost();
-    await doo.webSocketMessage(host, JSON.stringify({ t: 'addBot' }));
-    await doo.webSocketMessage(host, JSON.stringify({ t: 'start' }));
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'addBot' }));
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'start' }));
     const before = counts.puts;
-    await doo.webSocketMessage(host, JSON.stringify({ t: 'start' }));   // already started
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'start' }));   // already started
     assert.equal(host.last()?.t, 'error');
     assert.equal(counts.puts, before, 'a refusal should not be written to storage');
   });
@@ -121,8 +125,8 @@ describe('storage writes', () => {
 describe('hibernation', () => {
   test('a table rebuilds from storage with its sockets reattached', async () => {
     const { ctx, host, doo } = await seatedHost();
-    await doo.webSocketMessage(host, JSON.stringify({ t: 'addBot' }));
-    await doo.webSocketMessage(host, JSON.stringify({ t: 'start' }));
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'addBot' }));
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'start' }));
 
     // Evicted and woken: a brand new instance over the same storage and sockets.
     const woken = new RoomDO(ctx, DEFAULT_ENV);
@@ -138,7 +142,7 @@ describe('hibernation', () => {
     const { ctx, host } = await seatedHost();
     const woken = new RoomDO(ctx, DEFAULT_ENV);
     await settled();
-    await woken.webSocketMessage(host, JSON.stringify({ t: 'ping' }));
+    await woken.webSocketMessage(asWS(host), JSON.stringify({ t: 'ping' }));
     assert.equal(host.last()?.t, 'pong');
   });
 });

@@ -51,6 +51,16 @@ export interface PendingFoot {
   placed: number;
 }
 
+/** What a draw hands back to the player who made it. `engine` is only ever set
+ *  while the round's double is still being hunted; `ended` means the draw was
+ *  unplayable, so the marker went up and the turn is over. */
+export interface DrawResult {
+  tile: TileId;
+  playable?: boolean;
+  ended?: boolean;
+  engine?: boolean;
+}
+
 export interface GameOptions {
   players: Array<{ id: PlayerId; name: string; bot?: boolean; temper?: number }>;
   max?: number;
@@ -253,7 +263,7 @@ export class Game {
 
   // Seeking phase: draw one tile and keep it. Drawing the engine does not lay
   // it for you; the turn stays put so you can put it down yourself.
-  seekDraw(playerId: PlayerId): { tile: TileId; engine: boolean } {
+  seekDraw(playerId: PlayerId): DrawResult {
     const p = this.current;
     if (p.id !== playerId) throw new Err("It isn't your turn.");
     if (!this.boneyard.length) throw new Err('The boneyard is empty.');
@@ -393,7 +403,7 @@ export class Game {
     return train.owner === p.id ? 'their train' : `${this.player(train.owner)!.name}'s train`;
   }
 
-  draw(playerId: PlayerId): { tile: TileId; playable?: boolean; ended?: boolean; engine?: boolean } | void {
+  draw(playerId: PlayerId): DrawResult | void {
     if (this.status !== 'playing') throw new Err('The round is over.');
     // Drawing is the one action that means something in both phases, so the
     // seeking case is a redirect rather than a refusal.

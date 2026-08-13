@@ -13,13 +13,13 @@ const mode = process.argv[2];
 process.env.PORT = '0';
 process.env.LOG_LEVEL = 'info';         // the startup line is how we learn the port
 
-const say = (key, value) => process.stdout.write(`RESULT ${key}=${value}\n`);
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const say = (key: string, value: unknown) => process.stdout.write(`RESULT ${key}=${value}\n`);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // server/index.js logs the port it bound; catch it on the way past.
-let port = null;
+let port: number | null = null;
 const realLog = console.log;
-console.log = (s) => {
+console.log = (s: unknown) => {
   if (typeof s === 'string' && s.startsWith('{"ts"')) {
     try { const l = JSON.parse(s); if (l.evt === 'listening') port = l.port; } catch {}
   }
@@ -32,7 +32,7 @@ for (let i = 0; i < 100 && port === null; i++) await sleep(20);
 if (port === null) { say('startup', 'failed'); process.exit(2); }
 
 const alive = async () => {
-  try { return (await fetch(`http://127.0.0.1:${port}/api/health`).then((r) => r.json())).ok === true; }
+  try { return ((await fetch(`http://127.0.0.1:${port}/api/health`).then((r) => r.json())) as any).ok === true; }
   catch { return false; }
 };
 
@@ -50,12 +50,12 @@ if (mode === 'rejection') {
   // A fault inside a message handler: the player gets a generic apology, the
   // socket stays up, and the table is not lost.
   const { WebSocket } = await import('ws');
-  const { code } = await fetch(`http://127.0.0.1:${port}/api/new`, { method: 'POST' }).then((r) => r.json());
-  rooms.get(code).chatFrom = () => { throw new TypeError('synthetic bug: not a function'); };
+  const { code }: any = await fetch(`http://127.0.0.1:${port}/api/new`, { method: 'POST' }).then((r) => r.json());
+  (rooms.get(code) as any).chatFrom = () => { throw new TypeError('synthetic bug: not a function'); };
 
   const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?code=${code}`);
-  const seen = [];
-  ws.on('message', (raw) => seen.push(JSON.parse(raw)));
+  const seen: any[] = [];
+  ws.on('message', (raw: unknown) => seen.push(JSON.parse(String(raw))));
   await new Promise((r) => ws.once('open', r));
   ws.send(JSON.stringify({ t: 'join', name: 'Tester' }));
   await sleep(200);

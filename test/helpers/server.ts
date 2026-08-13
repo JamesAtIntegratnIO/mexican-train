@@ -8,10 +8,20 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { WebSocket } from 'ws';
+import type { ServerMessage } from '../../shared/protocol.js';
+
+/** ws sockets, plus the few conveniences these tests hang off them. */
+type TestSocket = WebSocket & {
+  seen: ServerMessage[];
+  say(obj: unknown): void;
+  expect(t: string, ms?: number): Promise<any>;
+  opened: Promise<any>;
+  closedWith: Promise<number | string>;
+};
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-export async function startServer(env = {}) {
+export async function startServer(env: Record<string, string> = {}) {
   const child = spawn(process.execPath, ['server/index.js'], {
     cwd: ROOT,
     // PORT=0 lets the OS hand out a free one, so tests never collide with a
@@ -20,26 +30,26 @@ export async function startServer(env = {}) {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
-  const lines = [];
+  const lines: Array<Record<string, any>> = [];
   let buffered = '';
-  const collect = (chunk) => {
+  const collect = (chunk: string) => {
     buffered += chunk;
     const parts = buffered.split('\n');
-    buffered = parts.pop();
+    buffered = parts.pop() as string;
     for (const line of parts) {
       if (line.startsWith('{"ts"')) { try { lines.push(JSON.parse(line)); } catch {} }
     }
   };
-  child.stdout.on('data', (d) => collect(String(d)));
-  child.stderr.on('data', (d) => collect(String(d)));
+  child.stdout!.on('data', (d: unknown) => collect(String(d)));
+  child.stderr!.on('data', (d: unknown) => collect(String(d)));
 
-  const port = await new Promise((resolve, reject) => {
+  const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('server never reported a port')), 10_000);
     const poll = setInterval(() => {
       const up = lines.find((l) => l.evt === 'listening');
       if (up) { clearInterval(poll); clearTimeout(timer); resolve(up.port); }
     }, 25);
-    child.once('exit', (code) => { clearInterval(poll); clearTimeout(timer); reject(new Error(`server exited early (${code})`)); });
+    child.once('exit', (code: number | null) => { clearInterval(poll); clearTimeout(timer); reject(new Error(`server exited early (${code})`)); });
   });
 
   return {
@@ -56,14 +66,14 @@ export async function startServer(env = {}) {
   };
 }
 
-export function openSocket(port, code) {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?code=${code}`);
-  const seen = [];
-  ws.on('message', (raw) => { try { seen.push(JSON.parse(raw)); } catch {} });
+export function openSocket(port: number, code: string) {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?code=${code}`) as TestSocket;
+  const seen: ServerMessage[] = [];
+  ws.on('message', (raw: unknown) => { try { seen.push(JSON.parse(String(raw))); } catch {} });
   ws.seen = seen;
-  ws.say = (obj) => ws.send(JSON.stringify(obj));
+  ws.say = (obj: unknown) => ws.send(JSON.stringify(obj));
   // Resolves with the first message of type `t`, or null if it never comes.
-  ws.expect = (t, ms = 3000) => new Promise((resolve) => {
+  ws.expect = (t: string, ms = 3000) => new Promise<any>((resolve) => {
     const found = seen.find((m) => m.t === t);
     if (found) return resolve(found);
     const started = seen.length;
@@ -73,12 +83,12 @@ export function openSocket(port, code) {
       if (hit) { clearInterval(poll); clearTimeout(timer); resolve(hit); }
     }, 20);
   });
-  ws.opened = new Promise((resolve, reject) => {
+  ws.opened = new Promise<any>((resolve, reject) => {
     ws.once('open', () => resolve(ws));
     ws.once('error', reject);
   });
-  ws.closedWith = new Promise((resolve) => ws.once('close', (c) => resolve(c)));
+  ws.closedWith = new Promise<number | string>((resolve) => ws.once('close', (c: number) => resolve(c)));
   return ws;
 }
 
-export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));

@@ -11,14 +11,22 @@ import path from 'node:path';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-function runFault(mode) {
-  return new Promise((resolve) => {
+interface FaultRun {
+  code: number;
+  /** The RESULT lines the fixture printed, keyed by name. */
+  results: Record<string, string>;
+  stdout: string;
+  stderr: string;
+}
+
+function runFault(mode: string): Promise<FaultRun> {
+  return new Promise<FaultRun>((resolve) => {
     execFile(process.execPath, ['test/fixtures/fault.js', mode], { cwd: ROOT, timeout: 30_000 },
-      (err, stdout, stderr) => {
-        const results = {};
+      (err: any, stdout: string, stderr: string) => {
+        const results: Record<string, string> = {};
         for (const line of stdout.split('\n')) {
           const m = line.match(/^RESULT (\w+)=(.*)$/);
-          if (m) results[m[1]] = m[2];
+          if (m) results[m[1]!] = m[2]!;
         }
         resolve({ code: err?.code ?? 0, results, stdout, stderr });
       });

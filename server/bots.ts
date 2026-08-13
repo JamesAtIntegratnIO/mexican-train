@@ -2,10 +2,36 @@
 // like a decent human opponent, not an oracle.
 
 import { parse, isDouble } from './game.js';
+import type { Game, EnginePlayer, Train, Seg, PendingFoot } from './game.js';
+import type { TileId, PlayerId, TrainId, Move } from '../shared/protocol.js';
+
+/** How many of each pip value a hand holds, so a play can be judged on the end
+ *  it leaves behind as well as the tile it sheds. */
+type Ends = Record<number, number>;
+
+/** What a bot decided to do. `play` carries the move; the rest are their own
+ *  whole answer. */
+export type BotMove =
+  | { type: 'engine' }
+  | { type: 'draw' }
+  | { type: 'pass' }
+  | { type: 'play'; tile: TileId; train: TrainId; seg: number };
+
+/** The facts about one candidate move that the scoring considerations share. */
+interface Considered {
+  train: Train;
+  seg: Seg;
+  foot: PendingFoot | undefined;
+  dbl: boolean;
+  outer: number;
+  cover: number;
+  rival: EnginePlayer | null;
+  aggro: number;
+}
 
 const NAMES = ['Bo', 'Cleo', 'Dax', 'Effie', 'Gus', 'Hattie', 'Ida', 'Jonah', 'Kit', 'Lupe', 'Mo', 'Nell', 'Otis', 'Pip', 'Ruby', 'Sable'];
 
-export function botName(taken) {
+export function botName(taken: string[]): string {
   const free = NAMES.filter((n) => !taken.includes(n));
   const pool = free.length ? free : NAMES;
   return pool[Math.floor(Math.random() * pool.length)];
@@ -14,23 +40,23 @@ export function botName(taken) {
 // Temperament runs 0 (friendly — unjams people) to 1 (aggressive — jams them).
 // Rolled once per bot and never exposed, so nobody can shop for a soft table.
 // Pulled toward the middle so most bots are ordinary and extremes stay rare.
-export function randomTemper() {
+export function randomTemper(): number {
   return (Math.random() + Math.random() + Math.random()) / 3;
 }
 
-export function temperName(t) {
+export function temperName(t: number): string {
   return t < 0.2 ? 'obliging' : t < 0.4 ? 'good-natured' : t < 0.6 ? 'even-handed'
     : t < 0.8 ? 'competitive' : 'ruthless';
 }
 
 // Returns {type:'play', tile, train} | {type:'draw'} | {type:'pass'}
-export function chooseMove(game, playerId) {
+export function chooseMove(game: Game, playerId: PlayerId): BotMove {
   if (game.phase === 'seeking') {
     // A bot lays the engine without ceremony; a human is asked to do it.
-    const me = game.player(playerId);
+    const me = game.player(playerId)!;
     return me.hand.includes(`${game.engine}-${game.engine}`) ? { type: 'engine' } : { type: 'draw' };
   }
-  const me = game.player(playerId);
+  const me = game.player(playerId)!;
   const moves = game.legalMoves(me);
   if (!moves.length) {
     if (game.boneyard.length && !game.drewThisTurn) return { type: 'draw' };
@@ -38,16 +64,16 @@ export function chooseMove(game, playerId) {
   }
 
   const ends = countEnds(me.hand);
-  let best = null;
+  let best: { s: number; mv: Move } | null = null;
   for (const mv of moves) {
     const s = score(game, me, mv, ends) + Math.random() * 1.5;
     if (!best || s > best.s) best = { s, mv };
   }
-  return { type: 'play', tile: best.mv.tile, train: best.mv.train, seg: best.mv.seg };
+  return { type: 'play', tile: best!.mv.tile, train: best!.mv.train, seg: best!.mv.seg };
 }
 
-function countEnds(hand) {
-  const c = {};
+function countEnds(hand: TileId[]): Ends {
+  const c: Ends = {};
   for (const t of hand) { const [a, b] = parse(t); c[a] = (c[a] || 0) + 1; c[b] = (c[b] || 0) + 1; }
   return c;
 }
@@ -55,7 +81,7 @@ function countEnds(hand) {
 // A move's score is a sum of independent considerations, each of which stands on
 // its own. Keeping them as separate functions means a weight can be read, argued
 // with and tuned without holding the rest of the arithmetic in your head.
-function score(game, me, mv, ends) {
+function score(game: Game, me: EnginePlayer, mv: Move, ends: Ends): number {
   const c = context(game, me, mv);
   const shed = game.tileScore(mv.tile);
   return shed * 1.2                                   // shedding pips is the whole game
@@ -66,9 +92,9 @@ function score(game, me, mv, ends) {
 }
 
 // The facts about a move that several of the considerations below share.
-function context(game, me, mv) {
-  const train = game.train(mv.train);
-  const seg = game.seg(train, mv.seg);
+function context(game: Game, me: EnginePlayer, mv: Move): Considered {
+  const train = game.train(mv.train)!;
+  const seg = game.seg(train, mv.seg)!;
   const foot = game.footOn(mv.train, mv.seg);
   const end = foot ? foot.value : seg.end;
   const [a, b] = parse(mv.tile);
@@ -78,14 +104,14 @@ function context(game, me, mv) {
     outer: a === end ? b : a,
     // Tiles still in hand that could cover this double if it were played.
     cover: dbl ? me.hand.filter((t) => t !== mv.tile && parse(t).includes(a)).length : 0,
-    rival: train.owner !== me.id && train.owner !== null ? game.player(train.owner) : null,
+    rival: train.owner !== me.id && train.owner !== null ? game.player(train.owner)! : null,
     // Temperament, rescaled: -1 fully friendly .. +1 fully aggressive.
     aggro: ((me.temper ?? 0.5) - 0.5) * 2,
   };
 }
 
 // Where to put it, ignoring who it hurts.
-function placement(me, { train, seg, outer }, ends) {
+function placement(me: EnginePlayer, { train, seg, outer }: Considered, ends: Ends): number {
   const followUps = ends[outer] || 0;
   if (train.owner === me.id) {
     return 14                        // getting your marker down is worth a lot
@@ -96,7 +122,7 @@ function placement(me, { train, seg, outer }, ends) {
   return 7 - followUps * 1.2;        // better still — but don't hand them an end you wanted
 }
 
-function doubleValue(game, { dbl, cover }) {
+function doubleValue(game: Game, { dbl, cover }: Considered): number {
   if (!dbl) return 0;
   if (game.foot === 1) return cover > 0 ? 9 : -6;   // a double you can follow up on is worth more
   return 4 + cover * 2;                             // a foot opens fresh ends you might use
@@ -104,7 +130,7 @@ function doubleValue(game, { dbl, cover }) {
 
 // Everything that only matters because somebody else is on the receiving end.
 // On your own train and on the Mexican train there is nobody to be nasty to.
-function spite(game, { dbl, cover, foot, rival, aggro }) {
+function spite(game: Game, { dbl, cover, foot, rival, aggro }: Considered): number {
   if (!rival) return 0;
   let s = 0;
   if (dbl) {

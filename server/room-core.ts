@@ -6,7 +6,7 @@
 // share this file, so the rules of the table can't drift between them.
 
 import { Game, Err, maxPlayersFor, handSize } from './game.js';
-import type { EnginePlayer } from './game.js';
+import type { EnginePlayer, DrawResult } from './game.js';
 import { chooseMove, botName, randomTemper } from './bots.js';
 import { log } from './log.js';
 import type {
@@ -20,6 +20,9 @@ export type Conn = unknown;
 
 export interface Seat {
   id: PlayerId;
+  /** Never set on a seated player. Present so `Seat | Watcher` discriminates on
+   *  it — the one question every caller asks of a member is which they are. */
+  spectator?: false;
   name: string;
   bot: boolean;
   temper?: number;
@@ -55,7 +58,7 @@ export const CODE_LEN = 6;                    // 32^6 ≈ 1.07e9 — not worth s
 export const MAX_PLAYERS = 8;
 export const MAX_WATCHERS = 20;
 
-export const BOT_DELAY = [700, 1500];
+export const BOT_DELAY: readonly [number, number] = [700, 1500];
 export const ABSENT_TAKEOVER_MS = 15000;
 
 // Rejection sampling off crypto bytes — no modulo bias, and not guessable the
@@ -84,6 +87,11 @@ const clean = (name: unknown, fallback: string): string => {
   return s || fallback;
 };
 const wait = ([lo, hi]: readonly [number, number]): number => lo + Math.random() * (hi - lo);
+
+/** A throttle key has to be a string, and a thrown value is not necessarily an
+ *  Error — keying on the message is what keeps one recurring fault to one line
+ *  a minute without hiding a different one behind it. */
+const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 // A Game is plain data plus methods, so it round-trips through JSON intact.
 const reviveGame = (data: unknown): Game | null => (data ? Object.assign(Object.create(Game.prototype), data) : null);
@@ -120,7 +128,7 @@ export class Room {
   // ------------------------------------------------------------------ persistence
 
   toJSON(): Record<string, unknown> {
-    const strip = (p) => ({ ...p, conn: null, connected: false });
+    const strip = (p: Seat | Watcher) => ({ ...p, conn: null, connected: false });
     return {
       code: this.code, createdAt: this.createdAt, emptySince: this.emptySince,
       lastActivity: this.lastActivity, hostId: this.hostId, settings: this.settings,
@@ -159,7 +167,7 @@ export class Room {
   reclaimSeat(p: Seat, conn: Conn, name?: string): Seat {
     this.adopt(p, conn);
     p.bot = false;
-    if (this.game) this.game.player(p.id).bot = false;
+    if (this.game) this.game.player(p.id)!.bot = false;
     if (name) p.name = clean(name, p.name);
     return p;
   }
@@ -256,9 +264,9 @@ export class Room {
   setSettings(byId: PlayerId, s: Partial<Settings>): void {
     this.requireHost(byId);
     if (this.game) throw new Err('The game has already started.');
-    if ([6, 9, 12].includes(s.max)) this.settings.max = s.max;
-    if ([1, 2, 3].includes(s.foot)) this.settings.foot = s.foot;
-    if (['house', 'official', 'pips'].includes(s.scoring)) this.settings.scoring = s.scoring;
+    if (s.max !== undefined && [6, 9, 12].includes(s.max)) this.settings.max = s.max;
+    if (s.foot !== undefined && [1, 2, 3].includes(s.foot)) this.settings.foot = s.foot;
+    if (s.scoring !== undefined && ['house', 'official', 'pips'].includes(s.scoring)) this.settings.scoring = s.scoring;
     this.tick();
   }
 
@@ -294,7 +302,7 @@ export class Room {
     this.tick();
   }
 
-  act(id: PlayerId, msg: ClientMessage): unknown {
+  act(id: PlayerId, msg: ClientMessage): DrawResult | void {
     if (!this.game) throw new Err('The game has not started.');
     if (msg.t === 'play') this.game.play(id, msg.tile, msg.train, msg.seg);
     else if (msg.t === 'draw') { const r = this.game.draw(id); this.tick(); return r; }
@@ -309,7 +317,7 @@ export class Room {
     const p = this.players.find((x) => x.id === targetId);
     if (!p || p.bot || p.connected) throw new Err('That seat is still occupied.');
     p.bot = true;
-    if (this.game) this.game.player(p.id).bot = true;
+    if (this.game) this.game.player(p.id)!.bot = true;
     this.say(`${p.name} is now played by a bot.`);
     this.tick();
   }
@@ -370,10 +378,10 @@ export class Room {
     log.throttle('error', 'bot_move_failed', {
       code: this.code, seat: seat.id, phase: g.phase, round: g.roundIndex,
       boneyard: g.boneyard.length, hand: g.player(seat.id)?.hand.length, err: e,
-    }, `bot:${e?.message}`);
+    }, `bot:${errText(e)}`);
     try { g.pass(seat.id); }
     catch (e2) {
-      log.throttle('error', 'bot_pass_failed', { code: this.code, seat: seat.id, err: e2 }, `botpass:${e2?.message}`);
+      log.throttle('error', 'bot_pass_failed', { code: this.code, seat: seat.id, err: e2 }, `botpass:${errText(e2)}`);
       g.forceSkip(seat.id);
     }
   }

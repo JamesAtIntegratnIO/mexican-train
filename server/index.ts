@@ -36,7 +36,7 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
 // merely unlucky, staying up serves nobody, so a burst trips a real exit and
 // lets the platform restart us clean.
 let faults = 0;
-const survive = (evt) => (err) => {
+const survive = (evt: string) => (err: unknown): void => {
   log.error(evt, { err, rooms: rooms.size });
   faults++;
   setTimeout(() => { faults--; }, 60_000).unref();
@@ -49,7 +49,7 @@ process.on('uncaughtException', survive('uncaught_exception'));
 process.on('unhandledRejection', survive('unhandled_rejection'));
 
 // Without this, a port already in use exits on a raw stack trace.
-server.on('error', (err) => {
+server.on('error', (err: NodeJS.ErrnoException) => {
   log.error('server_error', { err, port: PORT, host: HOST });
   if (err.code === 'EADDRINUSE' || err.code === 'EACCES') process.exit(1);
 });
@@ -57,7 +57,7 @@ server.on('error', (err) => {
 server.listen(PORT, HOST, () => {
   // The bound port, not the requested one: PORT=0 asks the OS to pick, which is
   // how the tests get a free port, and the log has to say which one it got.
-  const { port } = server.address();
+  const { port } = server.address() as import('node:net').AddressInfo;
   log.info('listening', { port, host: HOST, maxRooms: MAX_ROOMS });
   console.log(`\n  Mexican Train on http://localhost:${port}  (max ${MAX_ROOMS} tables)\n`);
 });

@@ -4,7 +4,7 @@ import { test, before, after, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { startServer, openSocket, sleep } from './helpers/server.js';
 
-let srv;
+let srv: Awaited<ReturnType<typeof startServer>>;
 before(async () => { srv = await startServer(); });
 after(async () => { await srv?.stop(); });
 
@@ -12,14 +12,14 @@ after(async () => { await srv?.stop(); });
 // the five the rate limiter allows per minute.
 async function newTable() {
   const r = await fetch(`${srv.base}/api/new`, { method: 'POST' });
-  const body = await r.json();
+  const body: any = await r.json();
   assert.equal(r.status, 200, `mint failed: ${JSON.stringify(body)}`);
   return body.code;
 }
 
 describe('http', () => {
   test('health reports what the process is holding', async () => {
-    const h = await fetch(`${srv.base}/api/health`).then((r) => r.json());
+    const h: any = await fetch(`${srv.base}/api/health`).then((r) => r.json());
     assert.equal(h.ok, true);
     assert.equal(typeof h.rooms, 'number');
     assert.equal(typeof h.uptime, 'number');
@@ -32,7 +32,7 @@ describe('http', () => {
   test('an unknown table is a 404 that says so', async () => {
     const r = await fetch(`${srv.base}/api/room/ZZZZZZ`);
     assert.equal(r.status, 404);
-    assert.ok((await r.json()).error);
+    assert.ok(((await r.json()) as any).error);
   });
 
   test('a cross-site origin is refused', async () => {
@@ -43,9 +43,9 @@ describe('http', () => {
   test('the single-page app is served for a table URL', async () => {
     const r = await fetch(`${srv.base}/g/ABC123`);
     assert.equal(r.status, 200);
-    assert.match(r.headers.get('content-type'), /text\/html/);
-    assert.equal(r.headers.get('x-frame-options'), 'DENY');
-    assert.match(r.headers.get('content-security-policy'), /default-src 'self'/);
+    assert.match(r.headers.get('content-type')!, /text\/html/);
+    assert.equal(r.headers.get('x-frame-options')!, 'DENY');
+    assert.match(r.headers.get('content-security-policy')!, /default-src 'self'/);
   });
 
   test('paths cannot climb out of the public directory', async () => {
@@ -98,13 +98,13 @@ describe('joining', () => {
     const fatal = await late.expect('fatal');
     assert.equal(fatal?.msg, 'That game is already under way.');
     assert.equal(await late.closedWith, 4005);
-    assert.equal(late.seen.find((m) => m.t === 'error'), undefined, 'a refusal must not also arrive as a toast');
+    assert.equal(late.seen.find((m: any) => m.t === 'error'), undefined, 'a refusal must not also arrive as a toast');
     host.close();
   });
 });
 
 describe('play', () => {
-  let code, host;
+  let code: any, host: any;
   before(async () => {
     code = await newTable();
     host = openSocket(srv.port, code);
@@ -132,8 +132,8 @@ describe('play', () => {
     const room = await host.expect('room', 4000);
     assert.ok(room);
     // The snapshot after start is the game; poll until it flips.
-    for (let i = 0; i < 40 && host.seen.filter((m) => m.t === 'room').pop()?.phase !== 'game'; i++) await sleep(100);
-    assert.equal(host.seen.filter((m) => m.t === 'room').pop()?.phase, 'game');
+    for (let i = 0; i < 40 && host.seen.filter((m: any) => m.t === 'room').pop()?.phase !== 'game'; i++) await sleep(100);
+    assert.equal(host.seen.filter((m: any) => m.t === 'room').pop()?.phase, 'game');
   });
 
   test('a rejected action is a readable error, not a disconnect', async () => {
@@ -168,7 +168,7 @@ describe('play', () => {
 
 describe('abuse controls', () => {
   test('minting too fast is a 429 that explains itself', async () => {
-    let limited = null;
+    let limited: any = null;
     for (let i = 0; i < 12 && !limited; i++) {
       const r = await fetch(`${srv.base}/api/new`, { method: 'POST' });
       if (r.status === 429) limited = await r.json();

@@ -7,13 +7,13 @@ import assert from 'node:assert/strict';
 import { log, setLevel } from '../server/log.js';
 import { rooms, createRoom, sweep } from '../server/rooms.js';
 
-let captured = [];
-let realLog, realErr;
+let captured: any[] = [];
+let realLog: any, realErr: any;
 
 beforeEach(() => {
   captured = [];
   realLog = console.log; realErr = console.error;
-  const take = (fallback) => (s) => {
+  const take = (fallback: any) => (s: any) => {
     if (typeof s === 'string' && s.startsWith('{"ts"')) captured.push(JSON.parse(s));
     else fallback(s);
   };
@@ -49,7 +49,7 @@ describe('levels', () => {
   });
 
   test('a value that will not serialise costs the line, not the process', () => {
-    const circular = {}; circular.self = circular;
+    const circular: any = {}; circular.self = circular;
     assert.doesNotThrow(() => log.info('awkward', { circular }));
     assert.equal(captured[0].unserialisable, true);
   });

@@ -7,6 +7,19 @@
 // means state has to survive eviction, so every mutation is written to storage.
 
 import { Room, Err } from '../server/room-core.js';
+import type { Conn, Seat, Watcher } from '../server/room-core.js';
+import type { ClientMessage, PlayerId } from '../shared/protocol.js';
+import type { Env } from './env.js';
+
+/** What rides on a hibernatable socket. It has to survive eviction, so it holds
+ *  both the identity and the flood budget — there is no memory to keep them in
+ *  between messages. */
+interface Attachment {
+  pid?: PlayerId;
+  spectator?: boolean;
+  tokens?: number;
+  ts?: number;
+}
 import { dispatch } from '../server/dispatch.js';
 import { log, setLevel } from '../server/log.js';
 
@@ -17,20 +30,29 @@ const BOT_AT = 'botAt';
 // socket attachment rather than in memory, because there is no memory to keep it
 // in: the object is evicted between messages. Returns the attachment to write
 // back, or null if this socket has been too chatty to keep.
-function spendToken(att, now) {
+function spendToken(att: Attachment, now: number): Attachment | null {
   const tokens = Math.min(40, (att.tokens ?? 40) + ((now - (att.ts ?? now)) / 1000) * 8);
   if (tokens < 1) return null;
   return { ...att, tokens: tokens - 1, ts: now };
 }
 
-const parseMessage = (raw) => {
-  let msg;
-  try { msg = JSON.parse(raw); } catch { return null; }
+const parseMessage = (raw: string | ArrayBuffer): ClientMessage | null => {
+  let msg: ClientMessage;
+  try { msg = JSON.parse(String(raw)); } catch { return null; }
   return msg && typeof msg.t === 'string' ? msg : null;
 };
 
 export class RoomDO {
-  constructor(ctx, env) {
+  ctx: DurableObjectState;
+  env: Env;
+  emptyGraceMs: number;
+  idleMs: number;
+  room: Room | null;
+  /** When the bot clock is next due, or null when nothing is pending. Written
+   *  to storage alongside the room, because the alarm has to survive eviction. */
+  botAt!: number | null;
+
+  constructor(ctx: DurableObjectState, env: Env) {
     this.ctx = ctx;
     this.env = env;
     setLevel(env.LOG_LEVEL);
@@ -43,51 +65,52 @@ export class RoomDO {
     ctx.blockConcurrencyWhile(async () => { await this.load(); });
   }
 
-  adapter() {
+  adapter(): import('../server/room-core.js').Adapter {
     return {
-      send: (ws, obj) => { try { ws.send(JSON.stringify(obj)); } catch {} },
-      close: (ws, code, reason) => { try { ws.close(code, reason); } catch {} },
+      send: (conn: Conn, obj: unknown) => { try { (conn as WebSocket).send(JSON.stringify(obj)); } catch {} },
+      close: (conn: Conn, code: number, reason: string) => { try { (conn as WebSocket).close(code, reason); } catch {} },
       cancelBot: () => { this.botAt = null; },
-      scheduleBot: (delay) => { this.botAt = Date.now() + delay; },
+      scheduleBot: (delay: number) => { this.botAt = Date.now() + delay; },
     };
   }
 
-  async load() {
-    const data = await this.ctx.storage.get(STATE_KEY);
+  async load(): Promise<void> {
+    const data = await this.ctx.storage.get<unknown>(STATE_KEY);
     this.room = data
       ? Room.revive(data, this.adapter())
       : null;
-    this.botAt = (await this.ctx.storage.get(BOT_AT)) ?? null;
+    this.botAt = (await this.ctx.storage.get<number>(BOT_AT)) ?? null;
     if (this.room) this.rebindConnections();
   }
 
   // Storage can't hold live sockets, so reattach them from the hibernated set.
-  rebindConnections() {
-    const byId = new Map();
+  rebindConnections(): void {
+    const room = this.room!;
+    const byId = new Map<PlayerId, WebSocket>();
     for (const ws of this.ctx.getWebSockets()) {
-      const att = ws.deserializeAttachment();
+      const att = ws.deserializeAttachment() as Attachment | null;
       if (att?.pid) byId.set(att.pid, ws);
     }
-    for (const p of [...this.room.players, ...this.room.watchers]) {
+    for (const p of [...room.players, ...room.watchers]) {
       const ws = byId.get(p.id);
       p.conn = ws || null;
       p.connected = !!ws;
     }
-    if (!this.room.anyoneHere() && !this.room.emptySince) this.room.emptySince = Date.now();
+    if (!room.anyoneHere() && !room.emptySince) room.emptySince = Date.now();
   }
 
-  async save() {
-    await this.ctx.storage.put(STATE_KEY, this.room.toJSON());
+  async save(): Promise<void> {
+    await this.ctx.storage.put(STATE_KEY, this.room!.toJSON());
     if (this.botAt) await this.ctx.storage.put(BOT_AT, this.botAt);
     else await this.ctx.storage.delete(BOT_AT);
     await this.setNextAlarm();
   }
 
   // A DO gets one alarm, so it has to serve both the bot clock and the sweeper.
-  async setNextAlarm() {
+  async setNextAlarm(): Promise<void> {
     const sweepAt = Math.min(
-      (this.room.emptySince ?? Infinity) + this.emptyGraceMs,
-      this.room.lastActivity + this.idleMs,
+      (this.room!.emptySince ?? Infinity) + this.emptyGraceMs,
+      this.room!.lastActivity + this.idleMs,
     );
     const next = Math.min(this.botAt ?? Infinity, sweepAt);
     if (!Number.isFinite(next)) return;
@@ -95,7 +118,7 @@ export class RoomDO {
     if (current === null || Math.abs(current - next) > 500) await this.ctx.storage.setAlarm(next);
   }
 
-  async alarm() {
+  async alarm(): Promise<void> {
     if (!this.room) return;
     const reason = this.room.expiry(this.emptyGraceMs, this.idleMs);
     if (reason) {
@@ -112,12 +135,12 @@ export class RoomDO {
 
   // ------------------------------------------------------------------ routing
 
-  async fetch(request) {
+  async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname === '/create') {
       if (this.room) return Response.json({ error: 'exists' }, { status: 409 });
-      this.room = new Room(url.searchParams.get('code'), this.adapter());
+      this.room = new Room(url.searchParams.get('code') ?? '', this.adapter());
       await this.save();
       return Response.json({ ok: true });
     }
@@ -145,7 +168,7 @@ export class RoomDO {
 
   // ------------------------------------------------------------------ sockets
 
-  async webSocketMessage(ws, raw) {
+  async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
     if (!this.room) { this.reply(ws, { t: 'fatal', msg: 'That session has expired. Start a new one.' }); return; }
 
     const att = this.admit(ws);
@@ -171,8 +194,8 @@ export class RoomDO {
 
   // Charge this message against the socket's flood budget and hand back its
   // attachment. Null means the socket was too chatty and has been closed.
-  admit(ws) {
-    const att = ws.deserializeAttachment() || {};
+  admit(ws: WebSocket): Attachment | null {
+    const att = (ws.deserializeAttachment() as Attachment | null) || {};
     const spent = spendToken(att, Date.now());
     if (!spent) { try { ws.close(4008, 'Too chatty'); } catch {} return null; }
     ws.serializeAttachment(spent);
@@ -182,26 +205,26 @@ export class RoomDO {
   // `join` is the message that establishes identity, which is the one thing the
   // two builds genuinely differ on — here it is a socket attachment, because
   // that is what survives hibernation.
-  onJoin(ws, att, msg) {
-    const p = this.room.join(ws, msg);
+  onJoin(ws: WebSocket, att: Attachment, msg: Extract<ClientMessage, { t: 'join' }>): boolean {
+    const p = this.room!.join(ws, msg);
     ws.serializeAttachment({ ...att, pid: p.id, spectator: !!p.spectator });
     this.reply(ws, { t: 'you', pid: p.id });
-    this.room.tick();
+    this.room!.tick();
     return true;
   }
 
-  onAction(ws, me, msg) {
-    const { reply, mutated } = dispatch(this.room, me, msg);
+  onAction(ws: WebSocket, me: Seat | Watcher, msg: ClientMessage): boolean {
+    const { reply, mutated } = dispatch(this.room!, me, msg);
     if (reply) this.reply(ws, reply);
     return mutated;   // a heartbeat must not cost a storage write per beat
   }
 
-  messageFailed(ws, me, msg, e) {
+  messageFailed(ws: WebSocket, me: Seat | Watcher | null | undefined, msg: ClientMessage, e: unknown): void {
     if (e instanceof Err) {
       // A refused join is terminal — the client has no way to carry on from it,
       // so end the socket rather than leave it sitting on a spinner.
       if (msg.t === 'join') {
-        log.throttle('info', 'join_refused', { code: this.room.code, why: e.message });
+        log.throttle('info', 'join_refused', { code: this.room!.code, why: e.message });
         this.reply(ws, { t: 'fatal', msg: e.message });
         try { ws.close(4005, 'Join refused'); } catch {}
         return;
@@ -210,21 +233,21 @@ export class RoomDO {
     }
     // Keyed by the fault itself, so a client retrying into a bug costs one line
     // a minute rather than one per attempt.
-    log.throttle('error', 'message_failed', { code: this.room.code, pid: me?.id, t: msg.t, err: e }, `msg:${e?.message}`);
+    log.throttle('error', 'message_failed', { code: this.room!.code, pid: me?.id, t: msg.t, err: e }, `msg:${e instanceof Error ? e.message : String(e)}`);
     return this.reply(ws, { t: 'error', msg: 'Something went wrong on the server.' });
   }
 
-  async webSocketClose(ws) { await this.dropped(ws); }
-  async webSocketError(ws, err) {
+  async webSocketClose(ws: WebSocket): Promise<void> { await this.dropped(ws); }
+  async webSocketError(ws: WebSocket, err: unknown): Promise<void> {
     log.debug('socket_error', { code: this.room?.code, err });
     await this.dropped(ws);
   }
 
-  async dropped(ws) {
+  async dropped(ws: WebSocket): Promise<void> {
     if (!this.room) return;
     this.room.leave(ws);
     await this.save();
   }
 
-  reply(ws, obj) { try { ws.send(JSON.stringify(obj)); } catch {} }
+  reply(ws: WebSocket, obj: unknown): void { try { ws.send(JSON.stringify(obj)); } catch {} }
 }
