@@ -1,5 +1,5 @@
-// The three things that take over the screen: the rules card, the scoreboard,
-// and the end-of-round card.
+// The four things that take over the screen: the rules card, the scoreboard,
+// the end-of-round card, and the one that asks whether you meant to walk out.
 
 import { $, esc, modalEl, openModal, closeModal } from './dom.js';
 import { S } from './state.js';
@@ -56,6 +56,32 @@ export function handOver(seatId: PlayerId, seatName: string): void {
     if (bot) bot.onclick = () => { send({ t: 'fillSeat', id: seatId }); closeModal(); };
   });
 }
+
+// The back gesture, caught before it spends the table. On a phone it is a
+// thumb's width from every other gesture, and walking out mid-game leaves a
+// table waiting on a turn that isn't coming — so it asks once.
+//
+// It says what is held rather than what is lost, because nothing is lost: the
+// seat keeps the hand, and the arrangement is remembered too. The card is a
+// check, not a warning, and the way out of it that costs nothing is the one
+// under your thumb.
+export function confirmLeave(leave: () => void): void {
+  openModal(`<div class="card">
+    <h2>Leave the table?</h2>
+    <p class="sub">The table waits on your turn rather than playing round you, so an empty seat holds everyone up.</p>
+    <div class="stack">
+      <button class="btn primary big" data-close>Stay at the table</button>
+      <button class="btn ghost" id="leaveTable">Leave</button>
+    </div>
+    <p class="foot-note">Your seat is held either way, along with the way you've arranged your hand. The front page lists this table so you can pick it straight back up.</p>
+  </div>`, () => { $<HTMLElement>('#leaveTable', modalEl).onclick = leave; });
+}
+
+/** Whether that card is the one currently on screen. Asked by the back gesture
+ *  itself: having asked once, a second swipe is an answer rather than a
+ *  question, and being unable to leave by the gesture you left with would be
+ *  its own kind of trap. */
+export const askingToLeave = (): boolean => !modalEl.hidden && !!$('#leaveTable', modalEl);
 
 // Bots roll a hidden temperament; it's only ever revealed once the game is done.
 const temperName = (t: number): string => t < 0.2 ? 'obliging' : t < 0.4 ? 'good-natured' : t < 0.6 ? 'even-handed'

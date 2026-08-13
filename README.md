@@ -445,11 +445,26 @@ can't play: being blocked raises it, because that is what the marker is for.)
   late to be dealt in isn't stuck there: the host can give them any seat nobody
   is sitting in — a bot's, or one whose player has dropped — and they inherit
   the hand it holds.
+- **Leaving by accident.** On a phone the back swipe is a thumb's width from
+  every other gesture, so a table with a game in it keeps a spare history entry
+  behind it: the swipe spends that instead of the table, and you get asked
+  whether you meant it. A real entry rather than a `beforeunload` handler,
+  because a table opened from a shared link has somebody else's site behind it,
+  and going back there would take the page down before it could ask. Swiping
+  again while the card is up is an answer, not a repeat of the question. A lobby
+  is never guarded — backing out of one costs nothing, and asking would only be
+  in the way.
 - **Rejoining.** Your seat is remembered in `localStorage`, so a refresh or a
   dropped phone puts you back in the same game — and so does coming back
   tomorrow, since the front page lists the tables you still hold a seat at.
   While the socket is down a banner says so, because everything on screen is
-  stale until it comes back.
+  stale until it comes back. Leaving the table takes its socket with it, and
+  coming back opens exactly one: two racing each other is what used to leave a
+  returning player watching that banner until they reloaded. A tab that was
+  hidden, or a page pulled back out of the browser's back/forward cache, asks
+  again the moment it is on screen rather than at the end of a backoff that was
+  frozen along with it — and a socket that claims to be open after all that is
+  made to prove it before it is believed.
 - **Bots** fill empty seats, and never take an occupied one. Someone who drops
   mid-turn is waited on for as long as it takes — the table says who it's
   waiting for, and if they aren't coming back the host hands the seat over,
@@ -472,8 +487,16 @@ can't play: being blocked raises it, because that is what the marker is for.)
   tile to reorder it, tap one to turn it around so a planned run reads left to
   right, and drop in *dividers* — half a tile wide — to keep the runs you are
   planning for each branch apart. Tap a divider to take it out; *Reset* puts
-  everything back to the dealt order. It's a view of your own hand, so it works
-  on anybody's turn and never leaves your browser.
+  everything back to the dealt order. While you are arranging, a hand too wide
+  for the screen wraps into rows rather than scrolling sideways, so all of it is
+  in reach of a thumb at once — sliding a stack of a dozen dominoes back and
+  forth to find one is no way to sort them. It goes back to a single row the
+  moment you are done, because during play the board is what wants the space; a
+  hand big enough to outgrow even the rows scrolls, and a tile held at the top or
+  bottom edge winds it along. It's a view of your own hand, so it works on
+  anybody's turn and never leaves your browser — but it does outlive the page
+  now, so a reload, or the back swipe that is far too easy to catch on a phone,
+  no longer costs you the sorting you did.
 - **Stacking a set you have finished with.** A hand you have been arranging for
   a while runs out of room long before the tiles run out. The ⊟ handle at the
   end of a set folds it into a pile: the tile that goes down first lies on top

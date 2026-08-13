@@ -9,11 +9,13 @@
 // already establishes both answers, so those go straight in; only a bare link
 // reaches the gate, because only then is there a question left to ask.
 
-import { $, app, esc, toast } from './dom.js';
+import { $, app, esc, toast, closeModal } from './dom.js';
 import { S } from './state.js';
 import { Snd } from './sound.js';
 import { LOGO } from './tiles.js';
-import { connect } from './net.js';
+import { connect, disconnect } from './net.js';
+import { restoreArrangement } from './hand.js';
+import { confirmLeave, askingToLeave } from './modals.js';
 import { onRoom, fatal } from './session.js';
 import { track } from './track.js';
 import { seatAt, watchingAt, rememberRole, remembered, forget } from './seats.js';
@@ -28,12 +30,23 @@ interface Lookup {
   gone?: boolean;
 }
 
-const hooks: Hooks = { room: onRoom, fatal };
+// Arming the back guard is the one thing that needs a snapshot rather than a
+// URL — only the table can say whether there is a game to walk out of — so it
+// is wrapped on here rather than reaching backwards into session.js.
+const hooks: Hooks = { room: (m) => { if (m.phase === 'game') arm(); onRoom(m); }, fatal };
 
 export function route(): void {
   const m = location.pathname.match(/^\/g\/([A-Za-z0-9]{3,8})$/);
+  guarded = false;                           // whatever spare entry there was is behind us now
+  // Walking out of a table takes its socket with it. Left open behind the front
+  // page it goes on answering for a table this tab has left, and its eventual
+  // close is reported against whichever one we are at by then — which is what a
+  // back swipe on a phone used to do, and why coming back stuck on
+  // "Reconnecting" until the page was reloaded.
+  disconnect();
   if (!m) { S.code = null; S.spectate = false; S.direct = null; renderHome(); return; }
   S.code = m[1].toUpperCase();
+  restoreArrangement(S.code);
   const known = seatAt(S.code);
   if (known || S.direct === S.code) {
     S.spectate = watchingAt(S.code);
@@ -49,7 +62,57 @@ export function route(): void {
 }
 
 export function go(path: string): void { history.pushState({}, '', path); route(); }
-window.addEventListener('popstate', route);
+
+// ---------------------------------------------------------------- the back gesture
+
+// A table with a game in it keeps a spare history entry behind it. The back
+// swipe spends that instead of the table, which is what buys us the chance to
+// ask — and it has to be a real entry rather than a beforeunload handler,
+// because a table opened from a shared link has another site behind it and
+// going back there would take the page down before we could say anything.
+//
+// The spare is indistinguishable from the table in the URL bar, so landing on
+// either of them looks the same and neither is worth re-routing to.
+let guarded = false;
+
+function arm(): void {
+  if (guarded) return;
+  guarded = true;
+  // A reload while sitting on the spare entry lands back on it with the flag
+  // still in history.state. Pushing another would mean a back press that
+  // visibly did nothing at all.
+  if (!history.state?.mtGuard) history.pushState({ mtGuard: true }, '', location.pathname);
+}
+
+window.addEventListener('popstate', (e: PopStateEvent) => {
+  // A pop that lands on the table already on screen has moved between it and
+  // its spare entry, not between pages: routing would tear down a good socket
+  // and rebuild the screen to show the very same thing.
+  if (S.code && location.pathname === `/g/${S.code}`) {
+    if (!e.state?.mtGuard) spendGuard();
+    return;
+  }
+  route();
+});
+
+// The spare entry has been spent. Put it back and ask — unless there is no game
+// to walk out of, or we asked a moment ago and the gesture came again, both of
+// which mean the back press meant exactly what it said.
+function spendGuard(): void {
+  guarded = false;                           // it is the spare that the gesture just spent
+  if (S.room?.phase !== 'game' || askingToLeave()) return leaveTable();
+  arm();                                     // ...and staying has to put another one behind us
+  confirmLeave(leaveTable);
+}
+
+// Out to the front page rather than further back, which is the one destination
+// that always exists — a table opened cold from a link has nothing behind it —
+// and the one that lists this table again for coming back to.
+function leaveTable(): void {
+  guarded = false;
+  closeModal();
+  go('/');
+}
 
 // Is there a table on the other end of this code, and is it under way?
 async function lookupTable(code: string): Promise<Lookup> {

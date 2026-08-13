@@ -2,13 +2,15 @@
 //
 // Rearranging is a display preference — your own order, which way round each
 // tile faces, where the dividers sit, and which of the sets between them you
-// have stacked up — so it works on anybody's turn and never leaves this browser.
+// have stacked up — so it works on anybody's turn and never leaves this
+// browser. It does outlive the page, though: see restoreArrangement().
 
 import { $, toast } from './dom.js';
 import { S } from './state.js';
 import { Snd } from './sound.js';
 import { tileHTML } from './tiles.js';
 import { send } from './net.js';
+import { savedHand, keepHand } from './seats.js';
 import { paintLanes } from './lanes.js';
 import { paintTurnbar } from './turnbar.js';
 import { playTile } from './actions.js';
@@ -81,6 +83,44 @@ function fencePiles(order: HandItem[]): HandItem[] {
   return out;
 }
 
+// ---------------------------------------------------------------- remembering it
+
+/** The round an arrangement we have just read back belongs to, until the first
+ *  snapshot says which round we are actually in. Null the rest of the time. */
+let restoredFor: number | null = null;
+
+/** Put the hand back the way it was left at this table. Arranging is real work,
+ *  and on a phone the back swipe that throws the page away is a thumb's width
+ *  from every other gesture — so losing the lot to one is a poor trade for a
+ *  layout that only ever lived in a variable. */
+export function restoreArrangement(code: string): void {
+  const m = savedHand(code);
+  restoredFor = m ? m.round : null;
+  S.handOrder = m ? m.order : [];
+  S.stacked = m ? m.stacked : [];
+  S.flipped = new Set(m ? m.flipped : []);
+  // The counter has to clear the dividers just restored, or the next one added
+  // is dropped in under a name that is already taken and the two move as one.
+  for (const h of S.handOrder) if (isDivider(h)) nextDivider = Math.max(nextDivider, Number(h.slice(1)) + 1);
+}
+
+/** An arrangement belongs to the round it was made in. Meeting a different one
+ *  means the tiles it names are gone anyway — but the dividers and the flips
+ *  aren't, so it goes as a whole rather than leaving its furniture behind. */
+function matchRound(round: number): void {
+  if (restoredFor === null) return;
+  const stale = restoredFor !== round;
+  restoredFor = null;
+  if (stale) { S.handOrder = []; S.stacked = []; S.flipped.clear(); }
+}
+
+const keepArrangement = (round: number): void => {
+  if (!S.code) return;
+  keepHand(S.code, { round, order: S.handOrder, stacked: S.stacked, flipped: [...S.flipped] });
+};
+
+// ---------------------------------------------------------------- painting
+
 export function paintHand(g: GameView): void {
   const el = $<HTMLElement>('#hand');
   if (S.room!.spectating) {
@@ -91,7 +131,11 @@ export function paintHand(g: GameView): void {
   }
   if (S.dragging) return;                       // don't yank tiles out from under a drag
 
+  matchRound(g.round);
   const hand = orderedHand(g);
+  // Every way of changing the arrangement ends in a repaint, so this is the one
+  // place that has to write it down.
+  keepArrangement(g.round);
   const playable = new Set(g.moves.map((m) => m.tile));
   const yours = g.turn === S.pid && g.phase === 'play'; // don't grey the hand out while hunting the engine
   const mustLay = g.prompt === 'engine' ? `${g.engine}-${g.engine}` : null;
@@ -232,31 +276,60 @@ function foldSet(first: TileId): void {
   S.stacked.push(set.tiles);
 }
 
+/** What one drag is: where it went down, for the tap threshold, and where the
+ *  pointer is now, which the edge-scroll needs between moves. */
+interface Drag { el: HTMLElement; ox: number; oy: number; x: number; y: number; moved: boolean }
+
+/** How near the top or bottom of a hand that has outgrown the dock a held tile
+ *  starts winding it along, and by how much a frame. */
+const EDGE = 34, SCROLL = 9;
+
+// A hand grows: draw enough tiles and it has more rows than the dock will show.
+// A tile held near an edge winds it along, which is both how you drag one to a
+// row you can't see and how you get to that row at all — under a finger the
+// tiles are grab handles, so they are no longer something to scroll by.
+//
+// Its own clock, because holding still at an edge is precisely the case
+// pointermove stops reporting. The drag is read through a function so this
+// follows the one in flight rather than a copy of it made when it started.
+function wind(hand: HTMLElement, held: () => Drag | null): void {
+  const d = held();
+  if (!d || !d.moved) return;
+  const r = hand.getBoundingClientRect();
+  const dir = d.y < r.top + EDGE ? -1 : d.y > r.bottom - EDGE ? 1 : 0;
+  if (dir) { hand.scrollTop += dir * SCROLL; slideInto(hand, d.el, d.x, d.y); }
+  requestAnimationFrame(() => wind(hand, held));
+}
+
 // An explicit arrange mode keeps dragging from fighting the hand's own
 // scrolling on touch.
 function initHandDrag(): void {
   const hand = $<HTMLElement>('#hand');
-  let drag: { el: HTMLElement; x: number; moved: boolean } | null = null;
+  let drag: Drag | null = null;
 
   hand.addEventListener('pointerdown', (e: PointerEvent) => {
     if (!S.arrange) return;
     const el = (e.target as Element).closest<HTMLElement>('.item'); if (!el) return;
     e.preventDefault();
-    drag = { el, x: e.clientX, moved: false };
+    drag = { el, ox: e.clientX, oy: e.clientY, x: e.clientX, y: e.clientY, moved: false };
     S.dragging = true;
     hand.setPointerCapture(e.pointerId);        // survives the tiles being re-ordered
   });
 
   hand.addEventListener('pointermove', (e: PointerEvent) => {
     if (!drag) return;
-    // A short press is a tap (turn the tile around); past the threshold it's a drag.
+    drag.x = e.clientX; drag.y = e.clientY;
+    // A short press is a tap (turn the tile around); past the threshold it's a
+    // drag. In any direction, now that a hand being arranged has rows: moving a
+    // tile up one is as ordinary a thing to want as moving it along.
     if (!drag.moved) {
-      if (Math.abs(e.clientX - drag.x) < 6) return;
+      if (Math.hypot(e.clientX - drag.ox, e.clientY - drag.oy) < 6) return;
       drag.moved = true;
       drag.el.classList.add('dragging');
       hand.classList.add('moving');   // the fold handles belong to positions that are about to change
+      wind(hand, () => drag);
     }
-    slideInto(hand, drag.el, e.clientX);
+    slideInto(hand, drag.el, e.clientX, e.clientY);
   });
 
   const endDrag = (e: PointerEvent) => {
@@ -310,17 +383,37 @@ const itemIds = (t: HTMLElement): HandItem[] =>
 
 // Move the node itself rather than repainting — smoother, and it keeps the
 // element reference alive for the rest of the gesture.
-function slideInto(hand: HTMLElement, el: HTMLElement, x: number): void {
-  for (const t of topItems(hand)) {
-    if (t === el) continue;
+//
+// Once the hand wraps, the pointer is very often over nothing at all: past the
+// end of a short row, in the gap between two of them. Asking which item is
+// nearest rather than which one is underneath answers all of those, and makes
+// dropping a tile on the end of a row a matter of aiming at the space after it.
+function slideInto(hand: HTMLElement, el: HTMLElement, x: number, y: number): void {
+  const t = nearestItem(topItems(hand).filter((n) => n !== el), x, y);
+  if (!t) return;
+  const r = t.getBoundingClientRect();
+  const inside = x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  // A tile taken over a stacked set goes into the run rather than beside it: a
+  // set can be added to without opening it up first. Only when genuinely over
+  // it, though — a pile that merely happened to be the closest thing is a
+  // neighbour to drop beside, not a set to join.
+  if (inside && t.dataset.pile && el.dataset.tile) return slideIntoPile(t, el, x);
+  hand.insertBefore(el, x < r.left + r.width / 2 ? t : t.nextSibling);
+}
+
+/** Which item the drag is asking to be put next to. Distance to the box rather
+ *  than to its middle, so a wide pile isn't beaten by the narrow divider beside
+ *  it; and a row weighs more than a column, so a pointer that has drifted off
+ *  the end of a row still belongs to the row it is on rather than to whatever
+ *  sits below it. */
+function nearestItem(items: HTMLElement[], x: number, y: number): HTMLElement | null {
+  let best: HTMLElement | null = null, near = Infinity;
+  for (const t of items) {
     const r = t.getBoundingClientRect();
-    if (x < r.left || x > r.right) continue;
-    // A tile taken over a stacked set goes into the run rather than beside it:
-    // a set can be added to without opening it up first.
-    if (t.dataset.pile && el.dataset.tile) return slideIntoPile(t, el, x);
-    hand.insertBefore(el, x < r.left + r.width / 2 ? t : t.nextSibling);
-    return;
+    const d = Math.max(r.left - x, 0, x - r.right) + Math.max(r.top - y, 0, y - r.bottom) * 4;
+    if (d < near) { near = d; best = t; }
   }
+  return best;
 }
 
 // Which gap in the pile the tile is over. The tiles overlap, so their boxes
