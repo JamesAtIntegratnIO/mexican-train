@@ -178,6 +178,12 @@ body.smalltiles .tile .pips { display: none !important; }
 }
 .tagline { text-align: center; color: var(--dim); font-size: 14.5px; margin-bottom: 26px; }
 .stack { display: grid; gap: 11px; }
+/* A table you can pick up again is a list row, not a compact control, and its
+   one-line summary is wider than a phone. Left to `nowrap` like every other
+   button it sets a minimum width the card cannot go below, and the whole front
+   door starts scrolling sideways. Block rather than flex, too, or the code and
+   the summary are two items that wrap past each other. */
+.btn[data-resume] { display: block; white-space: normal; }
 .divider { display: flex; align-items: center; gap: 12px; color: var(--dimmer); font-size: 12px; text-transform: uppercase; letter-spacing: .12em; margin: 20px 0; }
 .divider::before, .divider::after { content: ""; height: 1px; background: var(--line); flex: 1; }
 .row { display: flex; gap: 9px; }
