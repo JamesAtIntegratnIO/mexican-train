@@ -6,7 +6,8 @@ name: deploy
 #
 # No Nix here on purpose: installing it cost ~6 minutes per run, which is far
 # more than this job is worth. The flake stays the source of truth for local
-# development; the wrangler version below is pinned to match it.
+# development, and the wrangler version below used to be pinned to match it —
+# see the note on WRANGLER_VERSION for why it no longer can be.
 
 on:
   push:
@@ -35,7 +36,18 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  WRANGLER_VERSION: '4.93.0'   # keep in step with nixpkgs wrangler in flake.nix
+  # wrangler-action installs wrangler into this project's own tree, so the
+  # version has to satisfy the peer graph package.json already has: wrangler
+  # peer-depends on @cloudflare/workers-types, and only 4.108.0 and later ask
+  # for the 5.x this project carries. Anything older is an ERESOLVE, which is
+  # what took the deploy down from the TypeScript migration — the commit that
+  # first pulled those types in — until someone read the log. So this has a
+  # floor: bump it whenever @cloudflare/workers-types changes major, and keep
+  # it in step with ci.yml.
+  #
+  # nixpkgs-unstable is on 4.93.0, so `nix develop` may hand you an older CLI
+  # than this. That only affects local `wrangler dev`; nothing installs it here.
+  WRANGLER_VERSION: '4.123.0'
 
 jobs:
   deploy:
