@@ -5,7 +5,7 @@ import { $, esc, modalEl, openModal, closeModal } from './dom.js';
 import { S } from './state.js';
 import { avatar } from './tiles.js';
 import { send } from './net.js';
-import type { GameView, PlayerView } from '../shared/protocol.js';
+import type { GameView, PlayerView, PlayerId } from '../shared/protocol.js';
 
 export function showRules(): void {
   const g = S.room && S.room.game;
@@ -18,7 +18,7 @@ export function showRules(): void {
       <div><b>Starting a round</b>Everything is dealt, engine included. Whoever holds the round's double lays it and leads. If nobody was dealt it, players draw one tile each — keeping what they draw — until it turns up. The boneyard won't sit on it for longer than three to six times round the table: buried deeper than that, the double is floated up into that window, so a round never opens with a long stretch of everyone flipping a tile over. It's a ceiling, not a target — one near the top stays where the shuffle put it.</div>
       <div><b>Your first turn</b>You must start your own train with a tile matching the engine. Can't? Draw one; if it still won't go, put your marker up and play moves on.</div>
       <div><b>After that</b>One tile per turn, on your own train, the Mexican Train, or anyone's train whose marker is up.</div>
-      <div><b>Markers</b>Yours is entirely your call — raise or lower it whenever it's your turn. While it's up, <em>every branch</em> of your train is fair game for opponents.</div>
+      <div><b>Markers</b>Yours is entirely your call — raise or lower it at any point in the round, your turn or not, since playing a tile ends your turn before you could take it down. While it's up, <em>every branch</em> of your train is fair game for opponents.</div>
       <div><b>Doubles</b>Never an obligation. A double is just the open end of its branch — match it to carry that branch on, or leave it and play somewhere else entirely. Doubles are laid crosswise.</div>${
         foot > 1 ? `<div><b>Pigeon foot</b>A double takes <b>${foot} tiles</b>, and until all ${foot} are down <em>that whole train is frozen</em> — no branch of it grows, not the toes already laid and not branches that forked off earlier. Every other train carries on as normal, and you are never forced to feed a foot instead of playing elsewhere. Once it's full the branch forks into <b>${foot} live ends</b>.</div>` : ''}
       <div><b>If you can't play</b>You only draw when you have no legal play anywhere at all. If the drawn tile plays, you must play it. Otherwise end your turn — and put your marker up so the table knows.</div>
@@ -27,6 +27,34 @@ export function showRules(): void {
     </div>
     <div class="stack" style="margin-top:22px"><button class="btn primary" data-close>Got it</button></div>
   </div>`);
+}
+
+// What the host does with a seat nobody is sitting in. A bot is the reversible
+// answer — it stands in and gives the seat straight back — and a spectator is
+// the one that isn't, so the card says which is which rather than leaving the
+// host to find out.
+export function handOver(seatId: PlayerId, seatName: string): void {
+  const watching = S.room!.watchers.filter((w) => w.connected);
+  // Nobody watching is no decision to make: a bot is the only thing the seat
+  // can go to, so asking would be a dialog with one button in it.
+  if (!watching.length) return send({ t: 'fillSeat', id: seatId });
+
+  openModal(`<div class="card">
+    <h2>${esc(seatName)}'s seat</h2>
+    <p class="sub">The hand, the train and the score stay with the seat — only who plays it changes.</p>
+    <div class="stack">
+      ${watching.map((w) => `<button class="btn" data-give="${esc(w.id)}">Give it to ${esc(w.name)}</button>`).join('')}
+      <button class="btn" data-fill>Hand it to a bot</button>
+    </div>
+    <p class="foot-note" style="text-align:left">A bot only stands in: ${esc(seatName)} takes the seat back the moment they return. Somebody who is watching takes it over for good.</p>
+    <div class="stack" style="margin-top:14px"><button class="btn ghost" data-close>Keep waiting</button></div>
+  </div>`, () => {
+    modalEl.querySelectorAll<HTMLElement>('[data-give]').forEach((b) => {
+      b.onclick = () => { send({ t: 'giveSeat', id: seatId, to: b.dataset.give! }); closeModal(); };
+    });
+    const bot = $<HTMLElement>('[data-fill]', modalEl);
+    if (bot) bot.onclick = () => { send({ t: 'fillSeat', id: seatId }); closeModal(); };
+  });
 }
 
 // Bots roll a hidden temperament; it's only ever revealed once the game is done.

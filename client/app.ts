@@ -6,6 +6,7 @@
 //   dom · state · sound        leaves — no imports of ours at all
 //   tiles                      how a domino and a player are drawn
 //   net · actions              the socket, and the one thing a click sends
+//   lift                       carrying a tile from your hand to the board
 //   lanes · modals             the board, and the cards that cover it
 //   lobby · table              the two screens a table can be showing
 //   session                    what a fresh snapshot means

@@ -42,6 +42,7 @@ export function dispatch(room: Room, me: Seat | Watcher, msg: ClientMessage): Di
     case 'addBot': room.addBot(me.id); break;
     case 'remove': room.removePlayer(me.id, msg.id); break;
     case 'fillSeat': room.fillSeat(me.id, msg.id); break;
+    case 'giveSeat': room.giveSeat(me.id, msg.id, msg.to); break;
     case 'start': room.start(me.id); break;
     case 'nextRound': room.nextRound(me.id); break;
     case 'playAgain': room.playAgain(me.id); break;

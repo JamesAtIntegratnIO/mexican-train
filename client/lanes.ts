@@ -114,6 +114,7 @@ function paintBranches(el: Element, train: TrainView, g: GameView, live: Set<str
 function paintRail(rail: HTMLElement, s: PlacedSeg, key: string, isLive: boolean, frozen: FootView | null): void {
   const tiles = rail.querySelector('.tiles')!;
   appendTiles(tiles, rail, s, key);
+  rail.dataset.end = String(s.end);   // what a tile carried over this branch turns to face
 
   const hint = rail.querySelector('.empty-hint') as HTMLElement | null;
   if (hint) hint.style.display = s.tiles.length ? 'none' : '';

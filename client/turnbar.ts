@@ -8,7 +8,7 @@ import { $, esc } from './dom.js';
 import { S } from './state.js';
 import { Snd } from './sound.js';
 import { send } from './net.js';
-import { showEndModal } from './modals.js';
+import { showEndModal, handOver } from './modals.js';
 import type { GameView, TrainView } from '../shared/protocol.js';
 
 /** How the bar should look: a modifier class, the message, and any buttons. */
@@ -24,8 +24,10 @@ export function paintTurnbar(g: GameView): void {
   const myTrain = g.trains.find((t) => t.owner === S.pid);
   const { cls, msg, actions } = turnState(g, yours);
 
-  // Markers are fully manual: raise or lower yours at any point in your turn.
-  const marker = yours && g.status === 'playing' && g.phase === 'play' && myTrain ? markerButton(myTrain) : '';
+  // Markers are fully manual, and not only on your turn — playing a tile ends
+  // your turn, so a marker you meant to take down afterwards would otherwise
+  // have to stay up until the table had been all the way round.
+  const marker = g.status === 'playing' && g.phase === 'play' && myTrain ? markerButton(myTrain) : '';
 
   bar.className = `turnbar ${cls}`;
   bar.innerHTML = `<div class="msg">${msg}</div>${S.arrange ? '' : marker + actions}`;
@@ -49,7 +51,26 @@ function turnState(g: GameView, yours: boolean): BarState {
     };
   }
   if (yours) return { cls: 'you', ...yourPrompt(g) };
-  return { cls: '', actions: '', msg: waitingFor(g) };
+  return { cls: '', ...waitingOn(g) };
+}
+
+// Nobody's hand is played for them, so a table waiting on someone who has
+// dropped waits as long as it takes. The host is the way out of that, and the
+// button only appears where the wait actually is — on the turn that is stuck.
+// With nobody watching there is only one thing it can do, so it does it; with
+// somebody watching there is a choice to make, and the card makes it.
+function waitingOn(g: GameView): Omit<BarState, 'cls'> {
+  const who = g.players.find((p) => p.id === g.turn);
+  const stuck = !!who && !who.bot && !who.connected && S.room!.hostId === S.pid;
+  const anyoneWatching = S.room!.watchers.some((w) => w.connected);
+  return {
+    msg: waitingFor(g),
+    actions: stuck
+      ? `<button class="btn sm" data-act="seat" data-id="${esc(who!.id)}" data-nm="${esc(who!.name)}"
+           title="${esc(who!.name)} takes the seat back off a bot when they return">${
+             anyoneWatching ? 'Hand over the seat' : 'Hand to a bot'}</button>`
+      : '',
+  };
 }
 
 // What the server says you owe the table, and the button for it.
@@ -67,7 +88,12 @@ function yourPrompt(g: GameView): Omit<BarState, 'cls'> {
     };
   }
   if (g.prompt === 'play') {
-    return { msg: S.sel ? '<span>Now tap a glowing branch</span>' : '<span>Your turn — tap a tile</span>', actions: '' };
+    // Mid-lift the branch is already under the tile, so it is a drop rather than
+    // a second tap — and with nothing picked yet, say that carrying one works.
+    const msg = S.dragging ? 'Drop it on a glowing branch'
+      : S.sel ? 'Now tap a glowing branch'
+      : 'Your turn — tap a tile, or drag it over';
+    return { msg: `<span>${msg}</span>`, actions: '' };
   }
   if (g.prompt === 'draw') {
     return {
@@ -105,5 +131,6 @@ function onTurnbarClick(e: Event, g: GameView): void {
   if (act === 'engine') { Snd.clack(); send({ t: 'engine' }); }
   if (act === 'pass') send({ t: 'pass' });
   if (act === 'marker') { Snd.tap(); send({ t: 'marker', up: b.dataset.up === '1' }); }
+  if (act === 'seat') handOver(b.dataset.id!, b.dataset.nm!);
   if (act === 'scores') showEndModal(g);
 }

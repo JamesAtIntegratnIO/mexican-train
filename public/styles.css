@@ -328,6 +328,12 @@ a { color: var(--dim); }
 .rail.frozen .slot { border-style: dotted; }
 .rail.live { border-color: var(--gold) !important; box-shadow: 0 0 0 1px var(--gold), 0 0 24px -6px rgba(240,180,41,.55); cursor: pointer; }
 .rail.live:hover { background: rgba(240,180,41,.1); }
+/* the branch a carried tile is over: let go now and it lands here */
+.rail.live.over {
+  background: rgba(240,180,41,.18);
+  box-shadow: 0 0 0 2px var(--gold), 0 0 32px -4px rgba(240,180,41,.75);
+}
+.rail.live.over .slot { animation: none; background: var(--gold); color: #2a1d00; border-style: solid; }
 /* branches sit indented under the double they grew from */
 .rail { margin-left: calc(var(--depth, 0) * 18px); }
 .branch-cap {
@@ -484,12 +490,39 @@ a { color: var(--dim); }
    gesture for scrolling — hence touch-action, and hence the explicit mode. */
 .hand.arranging { cursor: grab; }
 .hand.arranging .item { touch-action: none; cursor: grab; opacity: 1 !important; filter: none !important; }
+/* A tile inside a pile is part of the thing being dragged, and touch-action is
+   read off whatever is under the finger — so it has to say `none` too, or the
+   hand scrolls sideways instead of the pile moving. */
+.hand.arranging .item .tile { touch-action: none; }
 .hand.arranging .tile:hover { transform: translateY(-3px); }
 .hand .item.dragging {
   cursor: grabbing; transform: translateY(-9px) scale(1.04); z-index: 2;
   box-shadow: var(--shadow), 0 0 0 2px var(--gold), 0 16px 30px -12px #000;
   transition: none;
 }
+
+/* ---- carrying a tile to the board ---- */
+/* Outside arrange mode the hand still scrolls sideways under a finger, so only
+   the across-the-grain gesture is ours: `pan-x` hands sideways back to the
+   browser and keeps up-and-out — which is where the board is — for the lift. */
+.hand .tile { touch-action: pan-x; }
+/* The tile is in flight; what is left in the hand is the gap it came out of. */
+.hand .tile.lifted { opacity: .2; filter: saturate(.25); transform: none; box-shadow: none; }
+body.lifting { cursor: grabbing; }
+
+/* The tile in flight, drawn at the pointer and turned to lie the way it will
+   land. Never a hit target — the branch under it has to be findable. Named
+   `carry` rather than `ghost` because that class is already the quiet variant
+   of a button, and every one of those is on screen at the end of a round. */
+.carry {
+  position: fixed; z-index: 40; pointer-events: none;
+  transform: translate(-50%, -58%) rotate(-3deg);
+  filter: drop-shadow(0 14px 18px rgba(0,0,0,.55));
+}
+.carry .tile { box-shadow: var(--shadow), 0 0 0 2px var(--gold), 0 18px 34px -14px #000; }
+.carry.nope .tile { box-shadow: var(--shadow), 0 0 0 2px var(--red); filter: saturate(.45); opacity: .85; }
+/* A fingertip covers the tile it is carrying, so on touch it rides above it. */
+@media (pointer: coarse) { .carry { transform: translate(-50%, -115%) rotate(-3deg); } }
 
 /* ---------- side panel ---------- */
 .panel {

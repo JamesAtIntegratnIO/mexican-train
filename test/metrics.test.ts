@@ -117,7 +117,12 @@ describe('play', () => {
     room.addBot(room.hostId!);
     room.start(room.hostId!);
     room.join({ w: 'looker' }, { name: 'Looker', spectate: true });
-    room.leave(conns[0]!);                 // in game, the seat stays and the clock takes it
+    const seat = room.hostId!;
+    room.leave(conns[0]!);                 // in game, the seat stays behind
+    // Nothing plays a human's hand for them, however long they have been gone,
+    // so the seat has to be handed over deliberately before the clock has a
+    // whole table to drive. See lifetime.test.ts, where that rule lives.
+    room.fillSeat(seat, seat);
     let taken = 0;
     while (taken < turns && room.runBot()) taken++;
     return { room, taken };

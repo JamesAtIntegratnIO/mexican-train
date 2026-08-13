@@ -490,13 +490,50 @@ export class Game {
     this.autoMark(p);
   }
 
-  // Markers are entirely the player's call, raised or lowered on their own turn.
+  // Markers are entirely the player's call, and not only on their own turn.
+  // Playing a tile ends the turn, so a marker meant to come down *after* a play
+  // had no moment to come down in: it stayed up for a whole lap of the table
+  // while everyone else had a go at the train it was exposing. It is your own
+  // train and your own risk either way, so the only thing asked here is that
+  // the round be under way.
   marker(playerId: PlayerId, up: boolean): void {
-    const p = this.requireTurn(playerId, 'play', 'The round has not started.', 'You can only move your marker on your turn.');
-    const train = this.train(playerId)!;
+    if (this.status !== 'playing') throw new Err('The round is over.');
+    if (this.phase !== 'play') throw new Err('The round has not started.');
+    const p = this.player(playerId);
+    const train = p ? this.train(playerId) : undefined;
+    if (!p || !train) throw new Err("You don't have a train at this table.");
     if (train.open === !!up) return;
     train.open = !!up;
     this.note(`${p.name} ${up ? 'put their marker up' : 'took their marker down'}.`, 'mark');
+  }
+
+  // Somebody else has taken this seat over. The hand, the train and the score
+  // stay exactly where they are — they belong to the seat, not to whoever was
+  // sitting in it — but the identity moves across, which is what makes the old
+  // occupant unable to pick the seat back up and the new one able to.
+  //
+  // Every reference to the old id has to travel with it, or the seat is left
+  // holding a hand it can no longer play.
+  reseat(from: PlayerId, to: PlayerId): void {
+    const p = this.player(from);
+    if (!p) throw new Err('There is nobody in that seat.');
+    if (this.player(to)) throw new Err('They are already at this table.');
+    p.id = to;
+    this.reseatTrains(from, to);
+    if (this.lastPlay?.trainId === from) this.lastPlay.trainId = to;
+    if (this.roundWinner === from) this.roundWinner = to;
+  }
+
+  // A player's train is keyed by their id twice over — it *is* the train id as
+  // well as its owner — and an open foot is keyed by the train, so the three
+  // move together or a frozen train is left owing toes to a train that has
+  // stopped existing, which nothing can then thaw.
+  reseatTrains(from: PlayerId, to: PlayerId): void {
+    for (const t of this.trains) {
+      if (t.id === from) t.id = to;
+      if (t.owner === from) t.owner = to;
+    }
+    for (const f of this.pending) if (f.train === from) f.train = to;
   }
 
   forceSkip(playerId: PlayerId): void {
