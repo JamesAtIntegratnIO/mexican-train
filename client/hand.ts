@@ -39,7 +39,7 @@ export function paintHand(g: GameView): void {
   if (S.room!.spectating) {
     if (el.dataset.sig === 'watching') return;
     el.dataset.sig = 'watching';
-    el.innerHTML = '<div class="hand-empty">You\'re watching this table — hands stay hidden. Say hello in the chat.</div>';
+    el.innerHTML = '<div class="hand-empty">You\'re watching this table — hands stay hidden.</div>';
     return;
   }
   if (S.dragging) return;                       // don't yank tiles out from under a drag

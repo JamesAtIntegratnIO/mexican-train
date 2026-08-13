@@ -3,16 +3,26 @@
 
 import type { WebSocket } from 'ws';
 import { Room, Err, newCode } from './room-core.js';
-import type { Adapter, Conn } from './room-core.js';
+import type { Adapter, Conn, Limits } from './room-core.js';
+import { flagOn, num } from '../shared/flags.js';
 import { log } from './log.js';
 
 export { Err };
 // Same trap as PORT: `Number(x) || default` would read MAX_ROOMS=0 as 500.
 export const MAX_ROOMS = process.env.MAX_ROOMS ? Number(process.env.MAX_ROOMS) : 500;
 
-// A game of 13 rounds takes hours, so nothing expires while it is being played.
-const EMPTY_GRACE_MS = Number(process.env.EMPTY_GRACE_MIN || 15) * 60 * 1000;
-const IDLE_MS = Number(process.env.IDLE_MIN || 30) * 60 * 1000;
+// An abandoned lobby is a click to recreate; an abandoned game is somebody's
+// evening. On this host both are held in process memory, so the long one is
+// only affordable because createRoom() can make space — see evictEmptyLobby().
+const LIMITS: Limits = {
+  emptyLobbyMs: num(process.env.EMPTY_GRACE_MIN, 15) * 60_000,
+  emptyGameMs: num(process.env.EMPTY_GRACE_GAME_MIN, 720) * 60_000,
+  maxLifeMs: num(process.env.MAX_LIFETIME_HOURS, 24) * 3_600_000,
+};
+
+// Off unless a deployment asks for it. A table nobody can talk in is a table
+// nobody can use to talk about anything.
+const CHAT = flagOn(process.env.CHAT_ENABLED);
 
 export const rooms = new Map<string, Room>();
 
@@ -37,7 +47,24 @@ function nodeAdapter(getRoom: () => Room): Adapter {
   };
 }
 
+// The cheapest thing in the process to lose: nobody is in it, and no hand is at
+// stake. Abandoned *games* are deliberately never taken — turning someone away
+// is better than deleting the evening they were coming back to — so a process
+// full of held games still refuses, which is the honest answer.
+function evictEmptyLobby(): boolean {
+  let oldest: Room | null = null;
+  for (const room of rooms.values()) {
+    if (room.game || room.emptySince === null) continue;
+    if (!oldest || room.emptySince < oldest.emptySince!) oldest = room;
+  }
+  if (!oldest) return false;
+  oldest.dispose('evicted');
+  rooms.delete(oldest.code);
+  return true;
+}
+
 export function createRoom(): Room {
+  if (rooms.size >= MAX_ROOMS) evictEmptyLobby();
   if (rooms.size >= MAX_ROOMS) {
     // Being full means every further attempt lands here, so throttle it.
     log.throttle('warn', 'at_capacity', { rooms: rooms.size, max: MAX_ROOMS });
@@ -46,7 +73,7 @@ export function createRoom(): Room {
   let code;
   do { code = newCode(); } while (rooms.has(code));
   let room: Room;
-  room = new Room(code, nodeAdapter(() => room));
+  room = new Room(code, nodeAdapter(() => room), { chat: CHAT });
   rooms.set(code, room);
   // Debug, not info: room_disposed tells the same story and more — how long the
   // table lived and whether anyone actually played — so paying for a line at
@@ -55,12 +82,12 @@ export function createRoom(): Room {
   return room;
 }
 
-// Sweep abandoned rooms so memory stays flat. A table in active play is never
-// touched, however long the game runs.
+// Sweep abandoned rooms so memory stays flat. A table with anyone still on it
+// is never touched short of the ceiling, however long they sit there thinking.
 export function sweep(now = Date.now()): number {
   let removed = 0;
   for (const [code, room] of rooms) {
-    const why = room.expiry(EMPTY_GRACE_MS, IDLE_MS, now);
+    const why = room.expiry(LIMITS, now);
     if (!why) continue;
     room.dispose(why);
     rooms.delete(code);

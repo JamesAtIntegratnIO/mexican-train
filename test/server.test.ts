@@ -200,7 +200,7 @@ describe('play', () => {
     watcher.close();
   });
 
-  test('spectators may talk but not play', async () => {
+  test('spectators may watch but not play', async () => {
     const watcher = openSocket(srv.port, code);
     await watcher.opened;
     watcher.say({ t: 'join', name: 'Nosy2', spectate: true });
@@ -209,6 +209,57 @@ describe('play', () => {
     const err = await watcher.expect('error');
     assert.equal(err?.msg, "You're watching this game.");
     watcher.close();
+  });
+});
+
+// A room anyone can mint, that keeps no logs and disappears by morning, is a
+// private channel as much as it is a card table. The feature is kept behind a
+// flag rather than deleted, so both sides of the flag are tested: off is what
+// deploys, and on has to still work for whoever turns it on.
+describe('chat, which this deployment does not run', () => {
+  test('a chat message is refused, and the socket carries on', async () => {
+    const code = await newTable();
+    const ws = openSocket(srv.port, code);
+    await ws.opened;
+    ws.say({ t: 'join', name: 'Talker' });
+    await ws.expect('you');
+    const room = await ws.expect('room');
+    assert.equal(room.chatEnabled, false, 'the client was told chat was available');
+
+    ws.say({ t: 'chat', text: 'meet me at the docks' });
+    const err = await ws.expect('error');
+    assert.equal(err?.msg, 'This table has no chat.');
+    assert.equal(ws.readyState, 1, 'the socket should stay open');
+
+    // The refusal has to be a refusal, not a hidden one: nothing may reach the
+    // table for the next snapshot to hand back out.
+    ws.say({ t: 'name', name: 'Talker' });
+    await sleep(200);
+    const after = ws.seen.filter((m: any) => m.t === 'room').pop() as any;
+    assert.ok(!after.chat.some((c: any) => !c.system), 'a player line landed anyway');
+    ws.close();
+  });
+
+  test('the flag still brings it back', async () => {
+    const on = await startServer({ CHAT_ENABLED: '1' });
+    try {
+      const { code }: any = await fetch(`${on.base}/api/new`, { method: 'POST' }).then((r) => r.json());
+      const ws = openSocket(on.port, code);
+      await ws.opened;
+      ws.say({ t: 'join', name: 'Talker' });
+      await ws.expect('you');
+      assert.equal((await ws.expect('room')).chatEnabled, true);
+
+      ws.say({ t: 'chat', text: 'your go' });
+      for (let i = 0; i < 40; i++) {
+        const last = ws.seen.filter((m: any) => m.t === 'room').pop() as any;
+        if (last?.chat.some((c: any) => c.text === 'your go' && !c.system)) { ws.close(); return; }
+        await sleep(50);
+      }
+      assert.fail('the message never reached the table');
+    } finally {
+      await on.stop();
+    }
   });
 });
 

@@ -25,8 +25,15 @@ import { log } from './log.js';
 import type { FunnelEvent, Foot, Scoring } from '../shared/protocol.js';
 
 /** Why a table was cleared. Short and closed, so it groups — the sentence the
- *  players are shown is a different thing and lives with them. */
-export type ClearedWhy = 'empty' | 'idle' | 'other';
+ *  players are shown is a different thing and lives with them.
+ *
+ *  `empty` is the ordinary end: everyone left and the grace ran out. `ceiling`
+ *  is a table that hit its maximum lifetime with people still at it, which is
+ *  rare and worth being able to count separately. `evicted` is server pressure
+ *  rather than anything the players did. There was an `idle` here until tables
+ *  stopped being cleared for quietness; rows written before that still carry
+ *  it. */
+export type ClearedWhy = 'empty' | 'ceiling' | 'evicted' | 'other';
 
 /** Everything a finished table was worth knowing, gathered at the one moment
  *  all of it is finally true. Exactly one of these per table, ever. */

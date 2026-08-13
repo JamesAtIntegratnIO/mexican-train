@@ -16,12 +16,16 @@ import { LOGO } from './tiles.js';
 import { connect } from './net.js';
 import { onRoom, fatal } from './session.js';
 import { track } from './track.js';
+import { seatAt, watchingAt, rememberRole, remembered, forget } from './seats.js';
 import type { Hooks } from './net.js';
 
 /** What /api/room/CODE says about a table, or why it could not be reached. */
 interface Lookup {
   info?: { code: string; phase: 'lobby' | 'game'; players: number };
   why?: string;
+  /** The table is genuinely gone, as opposed to a server we couldn't reach.
+   *  Only a 404 is grounds for throwing away a saved seat. */
+  gone?: boolean;
 }
 
 const hooks: Hooks = { room: onRoom, fatal };
@@ -30,12 +34,13 @@ export function route(): void {
   const m = location.pathname.match(/^\/g\/([A-Za-z0-9]{3,8})$/);
   if (!m) { S.code = null; S.spectate = false; S.direct = null; renderHome(); return; }
   S.code = m[1].toUpperCase();
-  const known = localStorage.getItem('mt.pid.' + S.code);
+  const known = seatAt(S.code);
   if (known || S.direct === S.code) {
-    S.spectate = localStorage.getItem('mt.role.' + S.code) === 'watch';
-    // Straight in, with no gate to pass: a reload, a reconnect, or the hop that
-    // follows making a table. The last of those has already said `made`, so
-    // only the ones arriving cold are worth a name of their own.
+    S.spectate = watchingAt(S.code);
+    // Straight in, with no gate to pass: a reload, a reconnect, the hop that
+    // follows making a table, or a tap on the resume list. The made-a-table hop
+    // has already said `made`, so only the ones arriving cold are worth a name
+    // of their own.
     if (S.direct !== S.code) track('returned');
     connect(S.code, hooks); renderConnecting();
   } else {
@@ -54,7 +59,7 @@ async function lookupTable(code: string): Promise<Lookup> {
     if (r.ok && body && !body.error) return { info: body };
     // A 404 really is a dead table; a 429 or a 500 is not, and saying so beats
     // telling someone their game vanished when the server was only busy.
-    if (r.status === 404) return { why: 'No table with that code — it may have expired.' };
+    if (r.status === 404) return { why: 'No table with that code — it may have expired.', gone: true };
     return { why: `${body?.error || 'The server had a problem.'} Try again in a moment.` };
   } catch {
     return { why: 'Could not reach the server. Check your connection and try again.' };
@@ -66,11 +71,18 @@ function enterTable(code: string, name: string, spectate: boolean): void {
   S.name = name; localStorage.setItem('mt.name', name);
   S.spectate = spectate;
   S.direct = code;
-  localStorage.setItem('mt.role.' + code, spectate ? 'watch' : 'play');
+  rememberRole(code, spectate);
   Snd.ready();
 }
 
 export function renderConnecting(what?: string): void {
+  // This throws the table's shell away, so the flag that says one is standing
+  // has to go with it. renderHome() has always done this; here it mattered less
+  // when the only way in was a cold page load. Now that the front page offers a
+  // way back into a table you had open a moment ago, arriving with a shell
+  // already built is an ordinary Tuesday — and the next snapshot would paint
+  // into elements this line just deleted.
+  S.built = false;
   app.innerHTML = `<div class="center"><div class="card" style="text-align:center">
     ${LOGO}
     <p class="tagline" style="margin-top:14px"><span class="spinner" style="display:inline-block;vertical-align:-2px"></span> ${
@@ -98,8 +110,11 @@ function renderHome(): void {
       <input id="code" maxlength="6" placeholder="CODE" style="text-transform:uppercase;letter-spacing:.2em;font-weight:700;text-align:center">
       <button class="btn" id="join">Join</button>
     </div>
-    <p class="foot-note">Sessions live in memory only and disappear when everyone leaves.<br>Play with 2–8 people, or fill the seats with bots.</p>
+    <div id="yours"></div>
+    <p class="foot-note">Tables are held for a day at most, and nothing is saved after that.<br>Play with 2–8 people, or fill the seats with bots.</p>
   </div></div>`;
+
+  void paintYourTables();
 
   const nameEl = $<HTMLInputElement>('#name'), codeEl = $<HTMLInputElement>('#code');
   const keepName = () => { S.name = nameEl.value.trim(); localStorage.setItem('mt.name', S.name); };
@@ -116,6 +131,40 @@ function renderHome(): void {
   codeEl.onkeydown = (e) => { if (e.key === 'Enter') $('#join').click(); };
   nameEl.onkeydown = (e) => { if (e.key === 'Enter') $('#new').click(); };
 }
+
+// Tables this browser still holds a seat at. A game is held long enough now to
+// come back to after work, which is worth nothing if the only way back is a
+// link buried in a group chat — so the way back is on the front page.
+//
+// Only the server knows which of them are still alive, so each is asked. A 404
+// is the one answer that justifies forgetting a seat; a server that was merely
+// busy or unreachable must not cost anyone their game.
+async function paintYourTables(): Promise<void> {
+  const mine = remembered().slice(0, 4);       // more than that isn't a memory aid
+  if (!mine.length) return;
+
+  const live = [];
+  for (const { code } of mine) {
+    const { info, gone } = await lookupTable(code);
+    if (info) live.push(info);
+    else if (gone) forget(code);
+  }
+
+  const el = $<HTMLElement>('#yours');
+  if (!el || !live.length) return;             // the page may have moved on while we asked
+  el.innerHTML = `<div class="divider">or pick up where you left off</div>
+    <div class="stack">${live.map(tableButton).join('')}</div>`;
+  el.onclick = (e: Event) => {
+    const b = (e.target as Element).closest<HTMLElement>('[data-resume]');
+    if (b) go('/g/' + b.dataset.resume);
+  };
+}
+
+const tableButton = (t: { code: string; phase: 'lobby' | 'game'; players: number }): string =>
+  `<button class="btn" data-resume="${esc(t.code)}" style="text-align:left">
+     <b>${esc(t.code)}</b> · ${t.phase === 'game' ? 'game in progress' : 'waiting in the lobby'}
+     · ${t.players} ${t.players === 1 ? 'player' : 'players'}
+   </button>`;
 
 async function startTable(): Promise<void> {
   const btn = $<HTMLButtonElement>('#new'); btn.disabled = true; btn.textContent = 'Setting the table…';
@@ -220,6 +269,6 @@ function gateHTML(code: string, info: NonNullable<Lookup['info']>, started: bool
 const roleNote = (started: boolean, spectate: boolean): string => {
   if (started) return 'This game is already under way, so there is no seat to take — but you can watch it.';
   return spectate
-    ? "You'll see the table and the chat, but nobody's hand."
+    ? "You'll see the table and how it's going, but nobody's hand."
     : "You'll be dealt a hand and take your turns.";
 };

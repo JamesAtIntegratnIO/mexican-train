@@ -10,10 +10,19 @@ binding = "ASSETS"
 run_worker_first = true
 
 [vars]
-# Minutes with nobody connected before a table is cleared (reconnect grace).
+# Minutes with nobody connected before an unstarted lobby is cleared.
 EMPTY_GRACE_MIN = "15"
-# Minutes with no activity at all before a table is cleared.
-IDLE_MIN = "30"
+# The same, for a table with a game in it — long enough to sleep on, because
+# people play this around work and dinner and bedtime.
+EMPTY_GRACE_GAME_MIN = "720"
+# Hours from creation before a table is cleared no matter what is happening.
+# This is the one that keeps "nothing is kept" true.
+MAX_LIFETIME_HOURS = "24"
+# Player-to-player chat. Deliberately off: an ephemeral, unlogged room that
+# anyone can mint and share by link is a private channel as much as it is a
+# card table, and that is not a thing this deployment wants to host. The code
+# is still here and still tested — set to "1" to bring it back.
+CHAT_ENABLED = "0"
 # error | warn | info | debug. debug logs a line per join, so keep it off here.
 LOG_LEVEL = "info"
 # Only needed if the app is served from a different host than the Worker.

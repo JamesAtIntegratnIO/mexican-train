@@ -83,8 +83,15 @@ function yourPrompt(g: GameView): Omit<BarState, 'cls'> {
 
 function waitingFor(g: GameView): string {
   const who = g.players.find((p) => p.id === g.turn);
+  const lead = S.room!.spectating ? '<span class="chip">watching</span>' : '<span class="spinner"></span>';
+  // Someone whose turn it is and who isn't here is a different kind of wait
+  // from someone thinking, and it lasts a lot longer — so say which it is
+  // rather than leaving the table staring at a spinner wondering.
+  if (who && !who.bot && !who.connected) {
+    return `${lead}<span>Waiting for ${esc(who.name)} to come back…</span>`;
+  }
   const what = g.phase === 'seeking' ? `is drawing for the double ${g.engine}…` : 'is thinking…';
-  return `${S.room!.spectating ? '<span class="chip">watching</span>' : '<span class="spinner"></span>'}<span>${esc(who ? who.name : '…')} ${what}</span>`;
+  return `${lead}<span>${esc(who ? who.name : '…')} ${what}</span>`;
 }
 
 const markerButton = (t: TrainView): string =>

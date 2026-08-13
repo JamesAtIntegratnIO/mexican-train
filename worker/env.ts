@@ -25,7 +25,10 @@ export interface Env {
   FUNNEL?: AnalyticsEngineDataset;
   CF_VERSION?: { id?: string };
   EMPTY_GRACE_MIN?: string;
-  IDLE_MIN?: string;
+  EMPTY_GRACE_GAME_MIN?: string;
+  MAX_LIFETIME_HOURS?: string;
+  /** "1" or "true" turns player-to-player chat on. Anything else leaves it off. */
+  CHAT_ENABLED?: string;
   LOG_LEVEL?: string;
   ALLOWED_ORIGINS?: string;
 }

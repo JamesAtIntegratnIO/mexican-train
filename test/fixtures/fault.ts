@@ -51,7 +51,7 @@ if (mode === 'rejection') {
   // socket stays up, and the table is not lost.
   const { WebSocket } = await import('ws');
   const { code }: any = await fetch(`http://127.0.0.1:${port}/api/new`, { method: 'POST' }).then((r) => r.json());
-  (rooms.get(code) as any).chatFrom = () => { throw new TypeError('synthetic bug: not a function'); };
+  (rooms.get(code) as any).rename = () => { throw new TypeError('synthetic bug: not a function'); };
 
   const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?code=${code}`);
   const seen: any[] = [];
@@ -59,7 +59,7 @@ if (mode === 'rejection') {
   await new Promise((r) => ws.once('open', r));
   ws.send(JSON.stringify({ t: 'join', name: 'Tester' }));
   await sleep(200);
-  ws.send(JSON.stringify({ t: 'chat', text: 'hello' }));
+  ws.send(JSON.stringify({ t: 'name', name: 'Renamed' }));
   await sleep(300);
 
   say('message', seen.find((m) => m.t === 'error')?.msg);

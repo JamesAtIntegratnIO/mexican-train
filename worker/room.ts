@@ -7,8 +7,9 @@
 // means state has to survive eviction, so every mutation is written to storage.
 
 import { Room, Err } from '../server/room-core.js';
-import type { Conn, Seat, Watcher } from '../server/room-core.js';
+import type { Conn, Seat, Watcher, RoomOptions, Limits } from '../server/room-core.js';
 import type { ClientMessage, PlayerId } from '../shared/protocol.js';
+import { flagOn, num } from '../shared/flags.js';
 import type { Env } from './env.js';
 
 /** What rides on a hibernatable socket. It has to survive eviction, so it holds
@@ -46,8 +47,10 @@ const parseMessage = (raw: string | ArrayBuffer): ClientMessage | null => {
 export class RoomDO {
   ctx: DurableObjectState;
   env: Env;
-  emptyGraceMs: number;
-  idleMs: number;
+  /** Read from the environment on every wake, never from storage, so both are
+   *  whatever the current deploy says they are. */
+  limits: Limits;
+  opts: RoomOptions;
   room: Room | null;
   /** When the bot clock is next due, or null when nothing is pending. Written
    *  to storage alongside the room, because the alarm has to survive eviction. */
@@ -61,8 +64,15 @@ export class RoomDO {
     // happens in here on an alarm — so the sink has to be installed here too,
     // not only on the Worker that fronts us.
     useAnalytics(env);
-    this.emptyGraceMs = Number(env.EMPTY_GRACE_MIN || 15) * 60 * 1000;
-    this.idleMs = Number(env.IDLE_MIN || 30) * 60 * 1000;
+    // Holding an abandoned game for hours costs this host almost nothing: the
+    // object hibernates, the state is a few KB of storage, and the alarm simply
+    // fires later. The ceiling is what keeps "nothing is kept" honest.
+    this.limits = {
+      emptyLobbyMs: num(env.EMPTY_GRACE_MIN, 15) * 60_000,
+      emptyGameMs: num(env.EMPTY_GRACE_GAME_MIN, 720) * 60_000,
+      maxLifeMs: num(env.MAX_LIFETIME_HOURS, 24) * 3_600_000,
+    };
+    this.opts = { chat: flagOn(env.CHAT_ENABLED) };
     this.room = null;
 
     // Hibernation wakes us with sockets already open, so rebuild before any
@@ -82,7 +92,7 @@ export class RoomDO {
   async load(): Promise<void> {
     const data = await this.ctx.storage.get<unknown>(STATE_KEY);
     this.room = data
-      ? Room.revive(data, this.adapter())
+      ? Room.revive(data, this.adapter(), this.opts)
       : null;
     this.botAt = (await this.ctx.storage.get<number>(BOT_AT)) ?? null;
     if (this.room) this.rebindConnections();
@@ -112,20 +122,17 @@ export class RoomDO {
   }
 
   // A DO gets one alarm, so it has to serve both the bot clock and the sweeper.
+  // When the table dies is the room's own rule — asking it rather than
+  // recomputing here is what keeps this host and the Node one agreeing.
   async setNextAlarm(): Promise<void> {
-    const sweepAt = Math.min(
-      (this.room!.emptySince ?? Infinity) + this.emptyGraceMs,
-      this.room!.lastActivity + this.idleMs,
-    );
-    const next = Math.min(this.botAt ?? Infinity, sweepAt);
-    if (!Number.isFinite(next)) return;
+    const next = Math.min(this.botAt ?? Infinity, this.room!.expiresAt(this.limits));
     const current = await this.ctx.storage.getAlarm();
     if (current === null || Math.abs(current - next) > 500) await this.ctx.storage.setAlarm(next);
   }
 
   async alarm(): Promise<void> {
     if (!this.room) return;
-    const why = this.room.expiry(this.emptyGraceMs, this.idleMs);
+    const why = this.room.expiry(this.limits);
     if (why) {
       this.room.dispose(why);
       await this.ctx.storage.deleteAll();     // the table is gone for good
@@ -145,7 +152,7 @@ export class RoomDO {
 
     if (url.pathname === '/create') {
       if (this.room) return Response.json({ error: 'exists' }, { status: 409 });
-      this.room = new Room(url.searchParams.get('code') ?? '', this.adapter());
+      this.room = new Room(url.searchParams.get('code') ?? '', this.adapter(), this.opts);
       await this.save();
       return Response.json({ ok: true });
     }

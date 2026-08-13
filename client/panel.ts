@@ -8,8 +8,12 @@ import type { RoomSnapshot, GameView, PlayerView, ChatLine } from '../shared/pro
 
 export function paintPanel(): void {
   const r = S.room!, g = r.game!;
+  // The chat tab isn't in the shell where chat is off, so a stale selection —
+  // this browser's last visit, when it was on — has nowhere to paint.
+  if (S.tab === 'chat' && !r.chatEnabled) S.tab = 'log';
   document.querySelectorAll<HTMLElement>('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === S.tab));
-  $('#chatForm').hidden = S.tab !== 'chat';
+  const form = $<HTMLFormElement>('#chatForm');
+  if (form) form.hidden = S.tab !== 'chat';
   const body = $<HTMLElement>('#pbody');
 
   if (S.tab === 'scores') {
@@ -19,7 +23,8 @@ export function paintPanel(): void {
     return;
   }
   if (S.tab === 'log') {
-    body.innerHTML = `<div class="log">${[...g.log].reverse().map((l) => `<div class="${l.kind}">${esc(l.text)}</div>`).join('')}</div>`;
+    body.innerHTML = `<div class="log">${[...g.log].reverse().map((l) => `<div class="${l.kind}">${esc(l.text)}</div>`).join('')}</div>`
+      + noticesHTML(r);
     return;
   }
   body.innerHTML = `<div class="chat-list">${r.chat.map(chatLine).join('')}</div>`;
@@ -29,6 +34,17 @@ export function paintPanel(): void {
 const chatLine = (c: ChatLine): string => (c.system
   ? `<div class="sys">${esc(c.text)}</div>`
   : `<div class="msg"><b>${esc(c.from)}</b>${esc(c.text)}</div>`);
+
+// Who came and went. These ride along with chat and are shown with it where it
+// exists; with chat off, the activity tab is the only place left for them, and
+// they are worth keeping — "Ana left" is why the seat is being played by a bot.
+function noticesHTML(r: RoomSnapshot): string {
+  if (r.chatEnabled) return '';
+  const notices = r.chat.filter((c) => c.system).reverse();
+  if (!notices.length) return '';
+  return `<div class="label" style="margin-top:16px">At the table</div>
+    <div class="chat-list">${notices.map(chatLine).join('')}</div>`;
+}
 
 function scoresHTML(r: RoomSnapshot, g: GameView): string {
   const ranked = [...g.players].sort((a, b) => a.score - b.score);
