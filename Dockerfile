@@ -1,4 +1,4 @@
-FROM node:24-alpine
+FROM node:26-alpine
 
 # dumb-init reaps zombies and forwards SIGTERM, so the graceful shutdown in
 # server/index.js actually runs and players get a clean close frame.
