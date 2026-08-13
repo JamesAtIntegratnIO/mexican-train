@@ -48,13 +48,24 @@ jobs:
       - name: Complexity gate
         run: npm run lint
 
+      # All three projects — the node build, the browser client, and the Worker
+      # under its own globals. The last is what stops a `process.env` reaching
+      # code that has to run on Workers.
+      - name: Types
+        run: npm run types
+
+      - name: Build
+        run: npm run build
+
+      # Run against dist/, not the sources: the thing under test should be the
+      # thing that ships, and the compiled tree is what the container gets.
       - name: Tests
-        run: node --test test/*.test.mjs
+        run: node --test dist/test/*.test.js
 
       # Kept separate from the tests so a rules failure is obvious in the job
       # list rather than buried in a combined step.
       - name: Rules engine soak
-        run: npm run soak -- 3
+        run: node dist/scripts/soak.js 3
 
   worker-config:
     name: worker config
@@ -66,6 +77,14 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+
+      - name: Install
+        run: npm ci
+
+      # The Worker serves public/ through its assets binding, so the dry run
+      # should see the same directory a deploy would.
+      - name: Build the client bundle
+        run: npm run build:client
 
       # Bundles the Worker and validates wrangler.toml — bindings, migrations,
       # the lot — without deploying. This is the check that would have caught a

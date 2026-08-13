@@ -6,19 +6,23 @@ import { S } from './state.js';
 import { Snd } from './sound.js';
 import { LOGO, avatar } from './tiles.js';
 import { send } from './net.js';
+import type { RoomSnapshot, SeatView, Settings } from '../shared/protocol.js';
 
-const SETS = [[12, 'Double-12'], [9, 'Double-9'], [6, 'Double-6']];
-const FEET = [[1, 'Cover once'], [2, '2 + fork'], [3, '3 + fork']];
-const SCORINGS = [['house', 'House'], ['official', 'Official'], ['pips', 'Just pips']];
+/** A picker's choices: the value sent to the server, and its label. */
+type Choice = [string | number, string];
 
-const SCORING_NOTE = {
+const SETS: Choice[] = [[12, 'Double-12'], [9, 'Double-9'], [6, 'Double-6']];
+const FEET: Choice[] = [[1, 'Cover once'], [2, '2 + fork'], [3, '3 + fork']];
+const SCORINGS: Choice[] = [['house', 'House'], ['official', 'Official'], ['pips', 'Just pips']];
+
+const SCORING_NOTE: Record<string, string> = {
   house: 'Blank halves score 0, but getting caught with the 0|0 costs 50.',
   official: 'Every blank half is 25, and the 0|0 is 50.',
   pips: 'Straight dot count — blanks are worth nothing at all.',
 };
 
-export function renderLobby() {
-  const r = S.room, isHost = r.hostId === S.pid;
+export function renderLobby(): void {
+  const r = S.room!, isHost = r.hostId === S.pid;
   const url = `${location.origin}/g/${r.code}`;
   const me = r.seats.find((s) => s.id === S.pid);
 
@@ -31,7 +35,7 @@ export function renderLobby() {
       <div class="share-url">
         <input id="url" readonly value="${esc(url)}">
         <button class="btn sm" id="copy">Copy</button>
-        ${navigator.share ? '<button class="btn sm" id="share">Share</button>' : ''}
+        ${'share' in navigator ? '<button class="btn sm" id="share">Share</button>' : ''}
       </div>
     </div>
 
@@ -49,7 +53,7 @@ export function renderLobby() {
   wireLobby(url);
 }
 
-function seatHTML(s, i, r, isHost) {
+function seatHTML(s: SeatView, i: number, r: RoomSnapshot, isHost: boolean): string {
   return `<div class="seat">
     ${avatar(s.name, i)}
     <span class="nm">${esc(s.name)}${s.id === S.pid ? ' <span style="color:var(--dimmer);font-weight:400">(you)</span>' : ''}</span>
@@ -62,7 +66,7 @@ function seatHTML(s, i, r, isHost) {
 // Every host setting is the same control: a row of choices and a note saying
 // what the chosen one means. `key` is the settings field, which is also how the
 // single click handler below knows what it was just asked to change.
-function picker(key, label, options, current, note) {
+function picker(key: keyof Settings, label: string, options: Choice[], current: string | number, note: string): string {
   return `<div><div class="label">${label}</div>
     <div class="seg" data-key="${key}">
       ${options.map(([v, t]) => `<button data-set="${v}" class="${current === v ? 'on' : ''}">${t}</button>`).join('')}
@@ -71,7 +75,7 @@ function picker(key, label, options, current, note) {
   </div>`;
 }
 
-function hostControlsHTML(r) {
+function hostControlsHTML(r: RoomSnapshot): string {
   const tooMany = r.seats.length > r.settings.seats;
   const setNote = `${r.settings.max + 1} rounds · ${r.settings.deal} tiles each · seats up to ${r.settings.seats}${
     tooMany ? ' <b style="color:var(--red)">— too many players for this set</b>' : ''}`;
@@ -91,33 +95,33 @@ function hostControlsHTML(r) {
     </div>`;
 }
 
-const waitingHTML = (r) =>
+const waitingHTML = (r: RoomSnapshot): string =>
   `<p class="foot-note">Waiting for ${esc((r.seats.find((s) => s.id === r.hostId) || {}).name || 'the host')} to start…</p>`;
 
-const watchersHTML = (r) => (r.watchers.length
+const watchersHTML = (r: RoomSnapshot): string => (r.watchers.length
   ? `<div class="label" style="margin-top:20px">Watching · ${r.watchers.length}</div>
      <div class="watchers">${r.watchers.map((w) => `<span class="chip ${w.id === S.pid ? 'gold' : ''}">${esc(w.name)}${w.id === S.pid ? ' (you)' : ''}</span>`).join('')}</div>`
   : '');
 
-function wireLobby(url) {
+function wireLobby(url: string): void {
   $('#copy').onclick = async () => {
-    try { await navigator.clipboard.writeText(url); } catch { $('#url').select(); document.execCommand('copy'); }
+    try { await navigator.clipboard.writeText(url); } catch { $<HTMLInputElement>('#url').select(); document.execCommand('copy'); }
     toast('Link copied — go paste it');
   };
   if ($('#share')) $('#share').onclick = () => navigator.share({ title: 'Mexican Train', text: 'Join my game', url }).catch(() => {});
-  $('#lname').onchange = (e) => { S.name = e.target.value.trim(); localStorage.setItem('mt.name', S.name); send({ t: 'name', name: S.name }); };
+  $<HTMLInputElement>('#lname').onchange = (e) => { S.name = (e.target as HTMLInputElement).value.trim(); localStorage.setItem('mt.name', S.name); send({ t: 'name', name: S.name }); };
   if ($('#addbot')) $('#addbot').onclick = () => send({ t: 'addBot' });
   if ($('#start')) $('#start').onclick = () => { Snd.ready(); send({ t: 'start' }); };
   if ($('#hostsettings')) $('#hostsettings').onclick = onSettingClick;
-  app.querySelectorAll('[data-remove]').forEach((b) => { b.onclick = () => send({ t: 'remove', id: b.dataset.remove }); });
+  app.querySelectorAll<HTMLElement>('[data-remove]').forEach((b) => { b.onclick = () => send({ t: 'remove', id: b.dataset.remove! }); });
 }
 
-function onSettingClick(e) {
-  const b = e.target.closest('[data-set]');
+function onSettingClick(e: Event): void {
+  const b = (e.target as Element).closest<HTMLElement>('[data-set]');
   if (!b) return;
-  const key = b.parentElement.dataset.key;
+  const key = (b.parentElement as HTMLElement).dataset.key as keyof Settings;
   // The set size and the foot are numbers on the wire; the scoring style is a
   // name. Sending the wrong one is silently ignored by the server's whitelist.
-  const value = key === 'scoring' ? b.dataset.set : Number(b.dataset.set);
-  send({ t: 'settings', settings: { [key]: value } });
+  const value = key === 'scoring' ? b.dataset.set! : Number(b.dataset.set);
+  send({ t: 'settings', settings: { [key]: value } as Partial<Settings> });
 }

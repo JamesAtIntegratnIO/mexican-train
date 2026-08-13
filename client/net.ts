@@ -6,10 +6,18 @@
 import { $, toast } from './dom.js';
 import { S } from './state.js';
 import { Snd } from './sound.js';
+import type { ClientMessage, ServerMessage, RoomSnapshot, DrewMessage } from '../shared/protocol.js';
 
-let hooks = { room: () => {}, fatal: () => {} };
+/** What the socket hands outward when a message needs the table redrawn. Passed
+ *  in rather than imported, so this module never depends on a view. */
+export interface Hooks {
+  room(m: RoomSnapshot): void;
+  fatal(msg: string): void;
+}
 
-export function connect(code, newHooks) {
+let hooks: Hooks = { room: () => {}, fatal: () => {} };
+
+export function connect(code: string, newHooks?: Hooks): void {
   if (newHooks) hooks = newHooks;
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const ws = new WebSocket(`${proto}//${location.host}/ws?code=${encodeURIComponent(code)}`);
@@ -19,8 +27,8 @@ export function connect(code, newHooks) {
     S.connected = true; S.retry = 0; paintConn();
     send({ t: 'join', pid: localStorage.getItem('mt.pid.' + code) || null, name: S.name, spectate: S.spectate });
   };
-  ws.onmessage = (e) => {
-    let m;
+  ws.onmessage = (e: MessageEvent) => {
+    let m: ServerMessage;
     try { m = JSON.parse(e.data); } catch { return; }   // not ours to make sense of
     onMessage(m, code, ws);
   };
@@ -35,9 +43,9 @@ export function connect(code, newHooks) {
   ws.onerror = () => {};
 }
 
-export const send = (o) => { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify(o)); };
+export const send = (o: ClientMessage): void => { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify(o)); };
 
-function onMessage(m, code, ws) {
+function onMessage(m: ServerMessage, code: string, ws: WebSocket): void {
   if (m.t === 'you') { S.pid = m.pid; localStorage.setItem('mt.pid.' + code, m.pid); return; }
   if (m.t === 'room') return hooks.room(m);
   if (m.t === 'error') return toast(m.msg, 'err');
@@ -54,7 +62,7 @@ function onMessage(m, code, ws) {
 
 // Only the drawer is told what came off the boneyard, so this is the one place
 // that tile is ever named.
-function announceDraw(m) {
+function announceDraw(m: DrewMessage): void {
   const t = m.tile.replace('-', ' | ');
   if (m.engine) { Snd.win(); return toast(`Drew ${t} — the engine! Lay it to start.`); }
   Snd.draw();
@@ -64,8 +72,8 @@ function announceDraw(m) {
 }
 
 // Anything on screen while the socket is down is stale — say so, and keep saying it.
-export function paintConn() {
-  let el = $('#connbar');
+export function paintConn(): void {
+  let el = $<HTMLElement>('#connbar');
   if (S.connected) { if (el) el.remove(); return; }
   if (!el) {
     el = document.createElement('div');

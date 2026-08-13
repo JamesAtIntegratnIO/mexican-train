@@ -10,31 +10,35 @@ import { S } from './state.js';
 import { Snd } from './sound.js';
 import { SEATC, laidHTML, markerHTML, avatar } from './tiles.js';
 import { playTile } from './actions.js';
+import type { GameView, TrainView, SegView } from '../shared/protocol.js';
+
+/** A branch with its depth in the fork tree, so the rail can be indented. */
+type PlacedSeg = SegView & { depth: number };
 
 // Yours first, then the communal train, then everyone else in seat order.
-function laneOrder(g) {
+function laneOrder(g: GameView): TrainView[] {
   const mine = g.trains.find((t) => t.owner === S.pid);
   const mex = g.trains.find((t) => t.owner === null);
   const rest = g.trains.filter((t) => t !== mine && t !== mex);
-  return [mine, mex, ...rest].filter(Boolean);
+  return [mine, mex, ...rest].filter((t): t is TrainView => Boolean(t));
 }
 
 // Branches are a tree; lay them out depth-first so children sit under their parent.
-function orderSegs(segs) {
-  const kids = new Map();
+function orderSegs(segs: SegView[]): PlacedSeg[] {
+  const kids = new Map<number | 'root', SegView[]>();
   for (const s of segs) {
     const k = s.parent === null ? 'root' : s.parent;
-    (kids.get(k) || kids.set(k, []).get(k)).push(s);
+    (kids.get(k) ?? kids.set(k, []).get(k)!).push(s);
   }
-  const out = [];
-  (function walk(k, depth) {
+  const out: PlacedSeg[] = [];
+  (function walk(k: number | 'root', depth: number): void {
     for (const s of kids.get(k) || []) { out.push({ ...s, depth }); walk(s.id, depth + 1); }
   })('root', 0);
   return out;
 }
 
-export function paintLanes(g) {
-  const wrap = $('#lanes');
+export function paintLanes(g: GameView): void {
+  const wrap = $<HTMLElement>('#lanes');
   const order = laneOrder(g);
   const sig = order.map((t) => t.id).join('|') + '#' + g.round;
   if (wrap.dataset.sig !== sig) {
@@ -44,7 +48,7 @@ export function paintLanes(g) {
   }
 
   // Live targets are per-branch, not per-train.
-  const live = new Set();
+  const live = new Set<string>();
   if (S.sel) for (const m of g.moves) if (m.tile === S.sel) live.add(m.train + ':' + m.seg);
 
   for (const train of order) {
@@ -53,8 +57,8 @@ export function paintLanes(g) {
   }
 }
 
-function paintLane(el, train, g, live) {
-  const owner = train.owner ? g.players.find((p) => p.id === train.owner) : null;
+function paintLane(el: Element, train: TrainView, g: GameView, live: Set<string>): void {
+  const owner = train.owner ? g.players.find((p) => p.id === train.owner) ?? null : null;
   // Brightness follows access: what you can play on is bright, what's shut to
   // you recedes. Independent of whose turn it is, so it doesn't flicker.
   const mine = train.owner === S.pid;
@@ -63,8 +67,8 @@ function paintLane(el, train, g, live) {
   el.classList.toggle('locked', !mine && !train.open);
   el.classList.toggle('lastone', !!owner && owner.tiles === 1);
 
-  const head = el.querySelector('.lane-head');
-  head.querySelector('.ct').textContent = owner ? `${owner.tiles}` : '';
+  const head = el.querySelector('.lane-head')!;
+  head.querySelector('.ct')!.textContent = owner ? `${owner.tiles}` : '';
   paintMarker(head, train, owner, g);
 
   paintBranches(el, train, g, live);
@@ -72,7 +76,7 @@ function paintLane(el, train, g, live) {
 
 // The little locomotive goes up and comes down; everything else about the head
 // is already in place from the shell.
-function paintMarker(head, train, owner, g) {
+function paintMarker(head: Element, train: TrainView, owner: GameView['players'][number] | null, g: GameView): void {
   const hasMarker = !!head.querySelector('.marker');
   if (train.open && !hasMarker) {
     const idx = owner ? g.players.findIndex((p) => p.id === owner.id) : 0;
@@ -81,13 +85,13 @@ function paintMarker(head, train, owner, g) {
       : markerHTML('#34d399', 'The black train — always open to everyone'));
   }
   if (!train.open && hasMarker) {
-    head.querySelector('.marker').remove();
+    head.querySelector('.marker')!.remove();
     head.querySelector('.chip.open')?.remove();
   }
 }
 
-function paintBranches(el, train, g, live) {
-  const box = el.querySelector('.branches');
+function paintBranches(el: Element, train: TrainView, g: GameView, live: Set<string>): void {
+  const box = el.querySelector('.branches') as HTMLElement;
   const segs = orderSegs(train.segs);
   const structSig = segs.map((s) => s.id + '@' + s.depth).join(',');
   if (box.dataset.sig !== structSig) {
@@ -97,17 +101,17 @@ function paintBranches(el, train, g, live) {
   }
 
   for (const s of segs) {
-    const rail = box.querySelector(`[data-seg="${s.id}"]`);
+    const rail = box.querySelector<HTMLElement>(`[data-seg="${s.id}"]`);
     const key = train.id + ':' + s.id;
     if (rail) paintRail(rail, s, key, live.has(key));
   }
 }
 
-function paintRail(rail, s, key, isLive) {
-  const tiles = rail.querySelector('.tiles');
+function paintRail(rail: HTMLElement, s: PlacedSeg, key: string, isLive: boolean): void {
+  const tiles = rail.querySelector('.tiles')!;
   appendTiles(tiles, rail, s, key);
 
-  const hint = rail.querySelector('.empty-hint');
+  const hint = rail.querySelector('.empty-hint') as HTMLElement | null;
   if (hint) hint.style.display = s.tiles.length ? 'none' : '';
 
   // the uncovered double itself
@@ -120,14 +124,14 @@ function paintRail(rail, s, key, isLive) {
   // trail so live ends get the space. Click it to open it back up.
   rail.classList.toggle('trail', !!s.closed && !S.expanded.has(key));
 
-  paintSlot(rail.querySelector('.slot'), s);
+  paintSlot(rail.querySelector('.slot') as HTMLElement, s);
   if (isLive) requestAnimationFrame(() => rail.scrollIntoView({ block: 'nearest' }));
 }
 
 // Only the tiles that aren't drawn yet get drawn. A branch that somehow got
 // shorter — a round reset, a snapshot arriving out of order — is the one case
 // worth starting over for.
-function appendTiles(tiles, rail, s, key) {
+function appendTiles(tiles: Element, rail: HTMLElement, s: PlacedSeg, key: string): void {
   const had = S.laneN[key] || 0;
   if (s.tiles.length < had) { tiles.innerHTML = ''; S.laneN[key] = 0; }
   for (let i = S.laneN[key] || 0; i < s.tiles.length; i++) tiles.insertAdjacentHTML('beforeend', laidHTML(s.tiles[i]));
@@ -138,7 +142,7 @@ function appendTiles(tiles, rail, s, key) {
 }
 
 // The open end of a branch, and what it is waiting for.
-function paintSlot(slot, s) {
+function paintSlot(slot: HTMLElement, s: PlacedSeg): void {
   slot.hidden = !!s.closed;
   if (s.closed) return;
   const owed = s.foot ? s.foot.need - s.foot.placed : 0;
@@ -151,7 +155,7 @@ function paintSlot(slot, s) {
     : `Open end — needs a ${s.end}`;
 }
 
-function laneShell(train, g) {
+function laneShell(train: TrainView, g: GameView): string {
   const owner = train.owner ? g.players.find((p) => p.id === train.owner) : null;
   const idx = owner ? g.players.findIndex((p) => p.id === owner.id) : 0;
   const mine = train.owner === S.pid;
@@ -165,7 +169,7 @@ function laneShell(train, g) {
   </div>`;
 }
 
-function railShell(s, train, g) {
+function railShell(s: PlacedSeg, train: TrainView, g: GameView): string {
   const mine = train.owner === S.pid;
   const cap = s.parent === null
     ? `<div class="hub-cap" title="engine">${g.engine}</div>`
@@ -179,14 +183,14 @@ function railShell(s, train, g) {
   </div>`;
 }
 
-export function onLaneClick(e) {
-  const rail = e.target.closest('.rail'); if (!rail) return;
+export function onLaneClick(e: Event): void {
+  const rail = (e.target as Element).closest('.rail'); if (!rail) return;
   if (rail.classList.contains('closed')) {           // spent branch — expand/collapse it
-    const key = rail.closest('.lane').dataset.train + ':' + rail.dataset.seg;
+    const key = (rail.closest('.lane') as HTMLElement).dataset.train + ':' + (rail as HTMLElement).dataset.seg;
     S.expanded.has(key) ? S.expanded.delete(key) : S.expanded.add(key);
     Snd.tap();
-    return paintLanes(S.room.game);
+    return paintLanes(S.room!.game!);
   }
   if (!rail.classList.contains('live')) return;
-  playTile(S.sel, rail.closest('.lane').dataset.train, Number(rail.dataset.seg));
+  playTile(S.sel!, (rail.closest('.lane') as HTMLElement).dataset.train!, Number((rail as HTMLElement).dataset.seg));
 }

@@ -1,12 +1,14 @@
 // Plays complete games across every rule combination and asserts the invariants
 // that matter. The rules engine is pure, so this needs no server and no network.
 //
-//   node scripts/soak.mjs [gamesPerCombo]
+//   node dist/scripts/soak.js [gamesPerCombo]
 
 import { Game, parse } from '../server/game.js';
-import type { EnginePlayer, Seg, PendingFoot } from '../server/game.js';
+import type { EnginePlayer, Seg, Train, PendingFoot } from '../server/game.js';
 import type { TileId, Foot, Scoring, PlayerId, Move } from '../shared/protocol.js';
 import type { BotMove } from '../server/bots.js';
+
+import { chooseMove, randomTemper } from '../server/bots.js';
 
 /** One cell of the sweep: a table set up a particular way. */
 interface Combo {
@@ -15,7 +17,6 @@ interface Combo {
   max: number;
   n: number;
 }
-import { chooseMove, randomTemper } from '../server/bots.js';
 
 const REPS = Number(process.argv[2] || 1);
 const fail = (m: string): never => { throw new Error(m); };
@@ -193,20 +194,27 @@ function checkSiblingsStayOpen(g: Game, me: EnginePlayer, offered: Move[]): numb
   for (const f of g.pending) {
     const train = g.train(f.train);
     if (!train || !g.canPlayOn(me, train)) continue;
-    for (const s of train.segs) {
-      if (s.id === f.seg || s.closed) continue;
-      if (g.footOn(train.id, s.id)) continue;             // owes toes of its own
-      const playable = me.hand.filter((t) => parse(t).includes(s.end));
-      if (!playable.length) continue;
-      checked++;
-      for (const tile of playable) {
-        if (!offered.some((m) => m.train === train.id && m.seg === s.id && m.tile === tile)) {
-          fail(`a foot on branch ${f.seg} suppressed ${tile} on open sibling branch ${s.id}`);
-        }
-      }
-    }
+    for (const s of train.segs) checked += checkSibling(g, me, offered, f, train, s);
   }
   return checked;
+}
+
+// One sibling branch beside an open foot. Returns 1 if the situation actually
+// arose — the branch was open, and this hand could have played on it — so the
+// caller can tell "the rule held" apart from "the rule was never tested".
+function checkSibling(
+  g: Game, me: EnginePlayer, offered: Move[], f: PendingFoot, train: Train, s: Seg,
+): number {
+  if (s.id === f.seg || s.closed) return 0;
+  if (g.footOn(train.id, s.id)) return 0;               // owes toes of its own
+  const playable = me.hand.filter((t) => parse(t).includes(s.end));
+  if (!playable.length) return 0;
+  for (const tile of playable) {
+    if (!offered.some((m) => m.train === train.id && m.seg === s.id && m.tile === tile)) {
+      fail(`a foot on branch ${f.seg} suppressed ${tile} on open sibling branch ${s.id}`);
+    }
+  }
+  return 1;
 }
 
 // Filling a foot forks its branch: the branch is spent, and it has exactly as

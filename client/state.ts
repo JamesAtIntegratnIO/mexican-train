@@ -6,7 +6,44 @@
 // what you have selected, how you have arranged your hand, how big you like the
 // tiles — and never leaves it.
 
-export const S = {
+import type { RoomSnapshot, TileId, PlayerId } from '../shared/protocol.js';
+
+export interface ClientState {
+  code: string | null;
+  pid: PlayerId | null;
+  name: string;
+  ws: WebSocket | null;
+  room: RoomSnapshot | null;
+  connected: boolean;
+  retry: number;
+  direct: string | null;
+
+  sel: TileId | null;
+  tab: 'scores' | 'log' | 'chat';
+  panel: boolean;
+  unread: number;
+  pipMode: boolean;
+  expanded: Set<string>;
+  spectate: boolean;
+  handOrder: TileId[];
+  flipped: Set<TileId>;
+  arrange: boolean;
+  dragging: boolean;
+  suppressClick: boolean;
+  zoom: number;
+
+  lastTurn: PlayerId | null;
+  lastPlayKey: string | null;
+  shownEnd: string | null;
+  lastFeet: number;
+  lastOnOne: string;
+
+  built: boolean;
+  /** How many tiles are already drawn on each branch, keyed `trainId:segId`. */
+  laneN: Record<string, number>;
+}
+
+export const S: ClientState = {
   code: null, pid: null, name: localStorage.getItem('mt.name') || '',
   ws: null, room: null, connected: false, retry: 0,
   direct: null,             // a table we may enter without asking anything more

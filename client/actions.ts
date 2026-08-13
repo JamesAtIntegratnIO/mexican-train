@@ -6,8 +6,9 @@
 import { S } from './state.js';
 import { Snd } from './sound.js';
 import { send } from './net.js';
+import type { TileId, TrainId } from '../shared/protocol.js';
 
-export function playTile(tile, train, seg) {
+export function playTile(tile: TileId, train: TrainId, seg: number): void {
   Snd.clack();
   send({ t: 'play', tile, train, seg });
   S.sel = null;

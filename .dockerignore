@@ -10,10 +10,14 @@ npm-debug.log
 README.md
 fly.toml
 .wrangler
-worker
 wrangler.toml
 flake.nix
 flake.lock
 terraform
 dist
+
+# worker/ is deliberately NOT ignored: the Node image never runs it, but the
+# builder type-checks the tests, and those exercise the Durable Object. It is
+# two files, and the alternative is a second tsconfig that makes the image
+# build differ from the one CI runs.
 .direnv

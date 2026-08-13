@@ -15,10 +15,17 @@ import { Snd } from './sound.js';
 import { LOGO } from './tiles.js';
 import { connect } from './net.js';
 import { onRoom, fatal } from './session.js';
+import type { Hooks } from './net.js';
 
-const hooks = { room: onRoom, fatal };
+/** What /api/room/CODE says about a table, or why it could not be reached. */
+interface Lookup {
+  info?: { code: string; phase: 'lobby' | 'game'; players: number };
+  why?: string;
+}
 
-export function route() {
+const hooks: Hooks = { room: onRoom, fatal };
+
+export function route(): void {
   const m = location.pathname.match(/^\/g\/([A-Za-z0-9]{3,8})$/);
   if (!m) { S.code = null; S.spectate = false; S.direct = null; renderHome(); return; }
   S.code = m[1].toUpperCase();
@@ -31,14 +38,14 @@ export function route() {
   }
 }
 
-export function go(path) { history.pushState({}, '', path); route(); }
+export function go(path: string): void { history.pushState({}, '', path); route(); }
 window.addEventListener('popstate', route);
 
 // Is there a table on the other end of this code, and is it under way?
-async function lookupTable(code) {
+async function lookupTable(code: string): Promise<Lookup> {
   try {
     const r = await fetch('/api/room/' + code);
-    const body = await r.json().catch(() => null);
+    const body: any = await r.json().catch(() => null);
     if (r.ok && body && !body.error) return { info: body };
     // A 404 really is a dead table; a 429 or a 500 is not, and saying so beats
     // telling someone their game vanished when the server was only busy.
@@ -50,7 +57,7 @@ async function lookupTable(code) {
 }
 
 // Remember who we are at this table and open the socket.
-function enterTable(code, name, spectate) {
+function enterTable(code: string, name: string, spectate: boolean): void {
   S.name = name; localStorage.setItem('mt.name', name);
   S.spectate = spectate;
   S.direct = code;
@@ -58,7 +65,7 @@ function enterTable(code, name, spectate) {
   Snd.ready();
 }
 
-export function renderConnecting(what) {
+export function renderConnecting(what?: string): void {
   app.innerHTML = `<div class="center"><div class="card" style="text-align:center">
     ${LOGO}
     <p class="tagline" style="margin-top:14px"><span class="spinner" style="display:inline-block;vertical-align:-2px"></span> ${
@@ -68,7 +75,7 @@ export function renderConnecting(what) {
 
 // ---------------------------------------------------------------- the front door
 
-function renderHome() {
+function renderHome(): void {
   S.built = false;
   app.innerHTML = `<div class="center"><div class="card">
     ${LOGO}
@@ -85,7 +92,7 @@ function renderHome() {
     <p class="foot-note">Sessions live in memory only and disappear when everyone leaves.<br>Play with 2–8 people, or fill the seats with bots.</p>
   </div></div>`;
 
-  const nameEl = $('#name'), codeEl = $('#code');
+  const nameEl = $<HTMLInputElement>('#name'), codeEl = $<HTMLInputElement>('#code');
   const keepName = () => { S.name = nameEl.value.trim(); localStorage.setItem('mt.name', S.name); };
   const requireName = () => {
     keepName();
@@ -101,15 +108,15 @@ function renderHome() {
   nameEl.onkeydown = (e) => { if (e.key === 'Enter') $('#new').click(); };
 }
 
-async function startTable() {
-  const btn = $('#new'); btn.disabled = true; btn.textContent = 'Setting the table…';
+async function startTable(): Promise<void> {
+  const btn = $<HTMLButtonElement>('#new'); btn.disabled = true; btn.textContent = 'Setting the table…';
   // The server has a real reason for every refusal here — too many tables too
   // fast, or at capacity. Checking the status is what lets the player see it;
   // parsing the body blind gives an undefined code and a silent dead button.
   let msg = 'Could not reach the server.';
   try {
     const r = await fetch('/api/new', { method: 'POST' });
-    const body = await r.json().catch(() => null);
+    const body: any = await r.json().catch(() => null);
     if (r.ok && body?.code) {
       // You named yourself and you're plainly playing — there is nothing left
       // to ask, so skip the gate and open the lobby.
@@ -122,15 +129,15 @@ async function startTable() {
   toast(msg, 'err');
 }
 
-async function joinByCode(raw) {
+async function joinByCode(raw: string): Promise<void> {
   const c = raw.trim().toUpperCase();
   if (c.length !== 6) return toast('Table codes are 6 characters.', 'err');
-  const btn = $('#join'); btn.disabled = true;
+  const btn = $<HTMLButtonElement>('#join'); btn.disabled = true;
   // Checking here means a bad code is a message on this page, rather than a
   // dead end on a screen the player has to navigate back out of.
   const { info, why } = await lookupTable(c);
   btn.disabled = false;
-  if (!info) return toast(why, 'err');
+  if (!info) return toast(why!, 'err');
   // A game already running is the one case with a question left in it: there
   // may be no seat to take. Let the gate put that choice properly.
   if (info.phase === 'game') return go('/g/' + c);
@@ -141,25 +148,25 @@ async function joinByCode(raw) {
 // ---------------------------------------------------------------- the shared link
 
 // Arriving on a shared link: who are you, and are you playing or watching?
-async function renderGate(code) {
+async function renderGate(code: string): Promise<void> {
   renderConnecting(`Looking up ${code}…`);
   const { info, why } = await lookupTable(code);
-  if (!info) return fatal(why);
+  if (!info) return fatal(why!);
 
-  const started = info.phase === 'game';
+  const started = info!.phase === 'game';
   let spectate = started;                      // no seats left to take mid-game
 
-  app.innerHTML = gateHTML(code, info, started, spectate);
+  app.innerHTML = gateHTML(code, info!, started, spectate);
 
-  const nameEl = $('#gname'), note = $('#rolenote');
+  const nameEl = $<HTMLInputElement>('#gname'), note = $('#rolenote');
   const paintRole = () => {
-    for (const b of $('#rolepick').children) b.classList.toggle('on', (b.dataset.role === 'watch') === spectate);
+    for (const b of Array.from($('#rolepick').children) as HTMLElement[]) b.classList.toggle('on', (b.dataset.role === 'watch') === spectate);
     note.textContent = roleNote(started, spectate);
   };
   paintRole();
 
-  $('#rolepick').onclick = (e) => {
-    const b = e.target.closest('button');
+  $('#rolepick').onclick = (e: Event) => {
+    const b = (e.target as Element).closest('button');
     if (!b || b.disabled) return;
     spectate = b.dataset.role === 'watch';
     Snd.tap(); paintRole();
@@ -175,7 +182,7 @@ async function renderGate(code) {
   nameEl.focus();
 }
 
-function gateHTML(code, info, started, spectate) {
+function gateHTML(code: string, info: NonNullable<Lookup['info']>, started: boolean, spectate: boolean): string {
   return `<div class="center"><div class="card">
     ${LOGO}
     <p class="tagline">Joining table <b style="color:var(--gold);letter-spacing:.14em">${esc(code)}</b>${
@@ -195,7 +202,7 @@ function gateHTML(code, info, started, spectate) {
   </div></div>`;
 }
 
-const roleNote = (started, spectate) => {
+const roleNote = (started: boolean, spectate: boolean): string => {
   if (started) return 'This game is already under way, so there is no seat to take — but you can watch it.';
   return spectate
     ? "You'll see the table and the chat, but nobody's hand."

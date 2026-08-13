@@ -5,8 +5,9 @@ import { $, esc, modalEl, openModal, closeModal } from './dom.js';
 import { S } from './state.js';
 import { avatar } from './tiles.js';
 import { send } from './net.js';
+import type { GameView, PlayerView } from '../shared/protocol.js';
 
-export function showRules() {
+export function showRules(): void {
   const g = S.room && S.room.game;
   const foot = g ? g.foot : 1;
   openModal(`<div class="card">
@@ -29,11 +30,11 @@ export function showRules() {
 }
 
 // Bots roll a hidden temperament; it's only ever revealed once the game is done.
-const temperName = (t) => t < 0.2 ? 'obliging' : t < 0.4 ? 'good-natured' : t < 0.6 ? 'even-handed'
+const temperName = (t: number): string => t < 0.2 ? 'obliging' : t < 0.4 ? 'good-natured' : t < 0.6 ? 'even-handed'
   : t < 0.8 ? 'competitive' : 'ruthless';
 
 // Full card: a row per round played, a column per player, totals underneath.
-export function scoreboardHTML(g) {
+export function scoreboardHTML(g: GameView): string {
   const played = Math.max(...g.players.map((p) => p.roundScores.length), 0);
   const best = Math.min(...g.players.map((p) => p.score));
   if (!played) return '<p class="foot-note" style="text-align:left">No rounds finished yet.</p>';
@@ -46,7 +47,7 @@ export function scoreboardHTML(g) {
   </table></div>`;
 }
 
-function roundRow(g, i) {
+function roundRow(g: GameView, i: number): string {
   const low = Math.min(...g.players.map((p) => p.roundScores[i] ?? Infinity));
   return `<tr><th class="rd">${i + 1}<small>d${g.max - i}</small></th>${g.players.map((p) => {
     const v = p.roundScores[i];
@@ -54,21 +55,21 @@ function roundRow(g, i) {
   }).join('')}</tr>`;
 }
 
-export function showScoreboard(g) {
+export function showScoreboard(g: GameView): void {
   openModal(`<div class="card wide"><h2>Scoreboard</h2>
     <p class="sub">Round ${g.round} of ${g.totalRounds} · lowest total wins.</p>
     ${scoreboardHTML(g)}
     <div class="stack" style="margin-top:22px"><button class="btn" data-close>Close</button></div></div>`);
 }
 
-export function showEndModal(g) {
+export function showEndModal(g: GameView): void {
   const done = g.status === 'gameOver';
   const ranked = [...g.players].sort((a, b) => a.score - b.score);
-  const isHost = S.room.hostId === S.pid;
+  const isHost = S.room!.hostId === S.pid;
   const winner = done ? ranked[0] : g.players.find((p) => p.id === g.roundWinner);
 
   openModal(`<div class="card wide">
-    <h2>${done ? `${esc(winner.name)} wins` : winner ? `${esc(winner.name)} went out` : 'Everyone blocked'}</h2>
+    <h2>${done ? `${esc(winner!.name)} wins` : winner ? `${esc(winner.name)} went out` : 'Everyone blocked'}</h2>
     <p class="sub">${done ? `Final standings after ${g.totalRounds} rounds.` : `Round ${g.round} of ${g.totalRounds} · engine was the double ${g.engine}.`}</p>
 
     <div class="label">${done ? 'Final' : 'This round'}</div>
@@ -86,12 +87,12 @@ export function showEndModal(g) {
       <button class="btn ghost" data-close>Look at the table</button>
     </div>
   </div>`, () => {
-    const b = $('#advance', modalEl);
+    const b = $<HTMLButtonElement>('#advance', modalEl);
     if (b) b.onclick = () => { send({ t: done ? 'playAgain' : 'nextRound' }); closeModal(); };
   });
 }
 
-function standingRow(g, p, i, done) {
+function standingRow(g: GameView, p: PlayerView, i: number, done: boolean): string {
   const last = p.roundScores[p.roundScores.length - 1] ?? 0;
   return `<div class="score-row">
     <span class="rank">${i + 1}</span>

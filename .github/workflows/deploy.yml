@@ -14,9 +14,12 @@ on:
     paths:
       - 'worker/**'
       - 'server/**'
+      - 'client/**'
+      - 'shared/**'
       - 'public/**'
       - 'test/**'
-      - 'scripts/soak.mjs'
+      - 'scripts/soak.ts'
+      - 'tsconfig*.json'
       - 'wrangler.toml'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
@@ -55,11 +58,20 @@ jobs:
       - name: Complexity gate
         run: npm run lint
 
+      - name: Types
+        run: npm run types
+
+      # Also produces public/app.js, which the Worker serves through its assets
+      # binding — deploying without this would ship an index.html whose script
+      # tag resolves to nothing.
+      - name: Build
+        run: npm run build
+
       - name: Tests
-        run: node --test test/*.test.mjs
+        run: node --test dist/test/*.test.js
 
       - name: Check the rules engine still holds
-        run: node scripts/soak.mjs 3
+        run: node dist/scripts/soak.js 3
 
       - name: Deploy
         uses: cloudflare/wrangler-action@v4

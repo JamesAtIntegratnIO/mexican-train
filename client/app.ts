@@ -22,13 +22,13 @@ import { applyPipMode, applyZoom } from './tiles.js';
 import { route, go } from './entry.js';
 
 document.addEventListener('click', (e) => {
-  const b = e.target.closest('[data-go]');
+  const b = (e.target as Element).closest<HTMLElement>('[data-go]');
   if (b && b.dataset.go === 'home') go('/');
 }, true);
 
 // Registered once, not per rebuild — the table shell is built many times a session.
 document.addEventListener('click', () => {
-  const pop = $('#displayPop');
+  const pop = $<HTMLElement>('#displayPop');
   if (pop && !pop.hidden) pop.hidden = true;
 });
 
@@ -41,7 +41,7 @@ addEventListener('pointerdown', () => Snd.ready(), { once: true });
 // trusting it. Rate-limited, because one bad render usually means the next one
 // fails too and a stack of identical toasts helps nobody.
 let lastGrumble = 0;
-function surfaceCrash(detail) {
+function surfaceCrash(detail: unknown): void {
   console.error(detail);
   if (Date.now() - lastGrumble < 10_000) return;
   lastGrumble = Date.now();

@@ -9,8 +9,9 @@ import { LOGO } from './tiles.js';
 import { renderLobby } from './lobby.js';
 import { renderTable } from './table.js';
 import { showEndModal } from './modals.js';
+import type { RoomSnapshot, GameView } from '../shared/protocol.js';
 
-export function onRoom(m) {
+export function onRoom(m: RoomSnapshot): void {
   const prev = S.room;
   S.room = m;
   // Lobby and table are different pages; the shell has to be rebuilt between them.
@@ -20,7 +21,7 @@ export function onRoom(m) {
   if (g) {
     soundCues(prev, g);
     callLastTile(prev, g);
-    if (!g.hand.includes(S.sel)) S.sel = null;
+    if (S.sel !== null && !g.hand.includes(S.sel)) S.sel = null;
   }
   countUnread(prev, m);
 
@@ -28,21 +29,21 @@ export function onRoom(m) {
   markEnd(g);
 }
 
-export function render() {
+export function render(): void {
   if (!S.room) return;
   if (S.room.phase === 'lobby') renderLobby();
   else renderTable();
 }
 
 // The table's noises: your turn coming round, a tile landing, a foot filling.
-function soundCues(prev, g) {
+function soundCues(prev: RoomSnapshot | null, g: GameView): void {
   if (g.turn === S.pid && S.lastTurn !== S.pid) Snd.turn();
   S.lastTurn = g.turn;
   tileCue(g);
   footCue(prev, g);
 }
 
-function tileCue(g) {
+function tileCue(g: GameView): void {
   const key = g.lastPlay ? `${g.lastPlay.trainId}:${g.lastPlay.tile}:${g.round}` : null;
   if (!key || key === S.lastPlayKey) return;
   if (S.lastPlayKey !== null) Snd.clack();   // silent on the first snapshot we see
@@ -50,7 +51,7 @@ function tileCue(g) {
 }
 
 // A foot just filled — the open-double count dropped without a new one appearing.
-function footCue(prev, g) {
+function footCue(prev: RoomSnapshot | null, g: GameView): void {
   const feet = g.pending.length;
   const sameRound = prev && prev.game && g.round === prev.game.round;
   if (sameRound && feet < S.lastFeet && g.foot > 1) Snd.foot();
@@ -58,14 +59,14 @@ function footCue(prev, g) {
 }
 
 // Digital stand-in for tapping the table: call out anyone down to one tile.
-function callLastTile(prev, g) {
+function callLastTile(prev: RoomSnapshot | null, g: GameView): void {
   const onOne = g.players.filter((p) => p.tiles === 1).map((p) => p.id).join(',');
   const sameRound = prev && prev.game && g.round === prev.game.round;
   if (onOne && onOne !== S.lastOnOne && sameRound) announceLastTiles(g);
   S.lastOnOne = onOne;
 }
 
-function announceLastTiles(g) {
+function announceLastTiles(g: GameView): void {
   const already = S.lastOnOne || '';
   for (const p of g.players) {
     if (p.tiles !== 1 || already.includes(p.id)) continue;
@@ -74,14 +75,14 @@ function announceLastTiles(g) {
   }
 }
 
-function countUnread(prev, m) {
+function countUnread(prev: RoomSnapshot | null, m: RoomSnapshot): void {
   const now = m.chat.filter((c) => !c.system).length;
   if (prev && now > prev.chat.filter((c) => !c.system).length && !S.panel) S.unread++;
 }
 
 // The end-of-round card belongs to a round, not to a snapshot — otherwise every
 // tick after the round ended would put it back on screen after you dismissed it.
-function markEnd(g) {
+function markEnd(g: GameView | null): void {
   if (!g || (g.status !== 'roundOver' && g.status !== 'gameOver')) { S.shownEnd = null; return; }
   const key = `${g.status}:${g.round}`;
   if (S.shownEnd === key) return;
@@ -90,7 +91,7 @@ function markEnd(g) {
   showEndModal(g);
 }
 
-export function fatal(msg) {
+export function fatal(msg: string): void {
   S.ws = null; S.room = null;
   app.innerHTML = `<div class="center"><div class="card">
     ${LOGO}
