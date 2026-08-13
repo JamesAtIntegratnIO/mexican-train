@@ -13,6 +13,22 @@ import { log, setLevel } from '../server/log.js';
 const STATE_KEY = 'room';
 const BOT_AT = 'botAt';
 
+// Per-socket flood control — a burst of 40, then ~8/s. The bucket rides on the
+// socket attachment rather than in memory, because there is no memory to keep it
+// in: the object is evicted between messages. Returns the attachment to write
+// back, or null if this socket has been too chatty to keep.
+function spendToken(att, now) {
+  const tokens = Math.min(40, (att.tokens ?? 40) + ((now - (att.ts ?? now)) / 1000) * 8);
+  if (tokens < 1) return null;
+  return { ...att, tokens: tokens - 1, ts: now };
+}
+
+const parseMessage = (raw) => {
+  let msg;
+  try { msg = JSON.parse(raw); } catch { return null; }
+  return msg && typeof msg.t === 'string' ? msg : null;
+};
+
 export class RoomDO {
   constructor(ctx, env) {
     this.ctx = ctx;
@@ -132,53 +148,70 @@ export class RoomDO {
   async webSocketMessage(ws, raw) {
     if (!this.room) { this.reply(ws, { t: 'fatal', msg: 'That session has expired. Start a new one.' }); return; }
 
-    // Per-socket flood control, carried on the socket so it survives hibernation.
-    const att = ws.deserializeAttachment() || {};
-    const now = Date.now();
-    const tokens = Math.min(40, (att.tokens ?? 40) + ((now - (att.ts ?? now)) / 1000) * 8);
-    if (tokens < 1) { try { ws.close(4008, 'Too chatty'); } catch {} return; }
+    const att = this.admit(ws);
+    if (!att) return;
 
-    let msg;
-    try { msg = JSON.parse(raw); } catch { return; }
-    if (!msg || typeof msg.t !== 'string') return;
-
+    const msg = parseMessage(raw);
+    if (!msg) return;
     const me = att.pid ? this.room.member(att.pid) : null;
-    ws.serializeAttachment({ ...att, tokens: tokens - 1, ts: now });
 
+    let mutated = false;
     try {
-      if (msg.t === 'join') {
-        const p = this.room.join(ws, msg);
-        ws.serializeAttachment({ pid: p.id, spectator: !!p.spectator, tokens: tokens - 1, ts: now });
-        this.reply(ws, { t: 'you', pid: p.id });
-        this.room.tick();
-        return await this.save();
-      }
-      if (!me) return this.reply(ws, { t: 'error', msg: 'Not joined.' });
-
-      const { reply, mutated } = dispatch(this.room, me, msg);
-      if (reply) this.reply(ws, reply);
-      // A heartbeat must not cost a storage write per beat.
-      if (!mutated) return;
+      if (msg.t === 'join') mutated = this.onJoin(ws, att, msg);
+      else if (!me) return this.reply(ws, { t: 'error', msg: 'Not joined.' });
+      else mutated = this.onAction(ws, me, msg);
     } catch (e) {
-      if (e instanceof Err) {
-        // A refused join is terminal — the client has no way to carry on from
-        // it, so end the socket rather than leave it sitting on a spinner.
-        if (msg.t === 'join') {
-          log.throttle('info', 'join_refused', { code: this.room.code, why: e.message });
-          this.reply(ws, { t: 'fatal', msg: e.message });
-          try { ws.close(4005, 'Join refused'); } catch {}
-          return;
-        }
-        return this.reply(ws, { t: 'error', msg: e.message });
-      }
-      // The half-applied change is deliberately left unsaved: the next wake
-      // rebuilds the table from the last good state rather than a broken one.
-      // Keyed by the fault itself, so a client retrying into a bug costs one
-      // line a minute rather than one per attempt.
-      log.throttle('error', 'message_failed', { code: this.room.code, pid: me?.id, t: msg.t, err: e }, `msg:${e?.message}`);
-      return this.reply(ws, { t: 'error', msg: 'Something went wrong on the server.' });
+      // The save below is deliberately skipped: a half-applied change is left
+      // unsaved so the next wake rebuilds the table from the last good state
+      // rather than a broken one.
+      return this.messageFailed(ws, me, msg, e);
     }
-    await this.save();
+    if (mutated) await this.save();
+  }
+
+  // Charge this message against the socket's flood budget and hand back its
+  // attachment. Null means the socket was too chatty and has been closed.
+  admit(ws) {
+    const att = ws.deserializeAttachment() || {};
+    const spent = spendToken(att, Date.now());
+    if (!spent) { try { ws.close(4008, 'Too chatty'); } catch {} return null; }
+    ws.serializeAttachment(spent);
+    return spent;
+  }
+
+  // `join` is the message that establishes identity, which is the one thing the
+  // two builds genuinely differ on — here it is a socket attachment, because
+  // that is what survives hibernation.
+  onJoin(ws, att, msg) {
+    const p = this.room.join(ws, msg);
+    ws.serializeAttachment({ ...att, pid: p.id, spectator: !!p.spectator });
+    this.reply(ws, { t: 'you', pid: p.id });
+    this.room.tick();
+    return true;
+  }
+
+  onAction(ws, me, msg) {
+    const { reply, mutated } = dispatch(this.room, me, msg);
+    if (reply) this.reply(ws, reply);
+    return mutated;   // a heartbeat must not cost a storage write per beat
+  }
+
+  messageFailed(ws, me, msg, e) {
+    if (e instanceof Err) {
+      // A refused join is terminal — the client has no way to carry on from it,
+      // so end the socket rather than leave it sitting on a spinner.
+      if (msg.t === 'join') {
+        log.throttle('info', 'join_refused', { code: this.room.code, why: e.message });
+        this.reply(ws, { t: 'fatal', msg: e.message });
+        try { ws.close(4005, 'Join refused'); } catch {}
+        return;
+      }
+      return this.reply(ws, { t: 'error', msg: e.message });
+    }
+    // Keyed by the fault itself, so a client retrying into a bug costs one line
+    // a minute rather than one per attempt.
+    log.throttle('error', 'message_failed', { code: this.room.code, pid: me?.id, t: msg.t, err: e }, `msg:${e?.message}`);
+    return this.reply(ws, { t: 'error', msg: 'Something went wrong on the server.' });
   }
 
   async webSocketClose(ws) { await this.dropped(ws); }

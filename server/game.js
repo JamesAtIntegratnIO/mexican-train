@@ -66,6 +66,29 @@ export class Game {
   train(id) { return this.trains.find((t) => t.id === id); }
   seg(train, segId) { return train.segs.find((s) => s.id === segId); }
 
+  // Resolve the train and branch a move names, saying which of the two was
+  // wrong. A client that has fallen behind the table will name a branch that
+  // has since forked away, so this is an ordinary refusal, not a fault.
+  locate(trainId, segId) {
+    const train = this.train(trainId);
+    if (!train) throw new Err('Unknown train.');
+    const seg = this.seg(train, segId);
+    if (!seg) throw new Err('Unknown branch.');
+    return { train, seg };
+  }
+
+  // Every action opens the same way: the round has to be live, the table has to
+  // be in the phase that action belongs to, and it has to be your turn. Only
+  // the phase complaint is passed in — "you can't do that yet" reads differently
+  // depending on what you tried to do.
+  requireTurn(playerId, phase, notYet, notYours = "It isn't your turn.") {
+    if (this.status !== 'playing') throw new Err('The round is over.');
+    if (this.phase !== phase) throw new Err(notYet);
+    const p = this.current;
+    if (p.id !== playerId) throw new Err(notYours);
+    return p;
+  }
+
   note(text, kind = 'info') {
     this.log.push({ text, kind, n: this.log.length });
     if (this.log.length > 60) this.log.shift();
@@ -77,19 +100,8 @@ export class Game {
     this.roundIndex++;
     if (this.roundIndex >= this.totalRounds) { this.status = 'gameOver'; return; }
 
-    // The engine double is dealt like any other tile — somebody has to turn it up.
-    const deck = shuffle(makeSet(this.max));
-    const size = handSize(this.players.length, this.max);
-    for (const p of this.players) {
-      p.hand = deck.splice(0, size).sort(sortTiles);
-      p.openingDone = false;
-    }
-    this.boneyard = deck;
-
-    this.trains = this.players.map((p) => this.newTrain(p.id, p.id));
-    const mexican = this.newTrain('mexican', null);
-    mexican.open = true;   // the black train sits on it from the start — always everyone's
-    this.trains.push(mexican);
+    this.deal();
+    this.layTrains();
 
     this.starter = this.roundIndex % this.players.length;
     this.turn = this.starter;
@@ -103,6 +115,24 @@ export class Game {
     this.roundWinner = null;
     this.note(`Round ${this.roundIndex + 1} — looking for the double ${this.engine}.`, 'round');
     this.seatEngineHolder();
+  }
+
+  // The engine double is dealt like any other tile — somebody has to turn it up.
+  deal() {
+    const deck = shuffle(makeSet(this.max));
+    const size = handSize(this.players.length, this.max);
+    for (const p of this.players) {
+      p.hand = deck.splice(0, size).sort(sortTiles);
+      p.openingDone = false;
+    }
+    this.boneyard = deck;
+  }
+
+  layTrains() {
+    this.trains = this.players.map((p) => this.newTrain(p.id, p.id));
+    const mexican = this.newTrain('mexican', null);
+    mexican.open = true;   // the black train sits on it from the start — always everyone's
+    this.trains.push(mexican);
   }
 
   newTrain(id, owner) {
@@ -127,10 +157,7 @@ export class Game {
 
   // Laying the engine is a play in its own right, so it uses up your turn.
   layEngine(playerId) {
-    if (this.status !== 'playing') throw new Err('The round is over.');
-    if (this.phase !== 'seeking') throw new Err('The engine is already down.');
-    const p = this.current;
-    if (p.id !== playerId) throw new Err("It isn't your turn.");
+    const p = this.requireTurn(playerId, 'seeking', 'The engine is already down.');
     const engineTile = `${this.engine}-${this.engine}`;
     if (!p.hand.includes(engineTile)) throw new Err(`You don't have the double ${this.engine}.`);
 
@@ -215,15 +242,27 @@ export class Game {
   // ---------------------------------------------------------------- actions
 
   play(playerId, tile, trainId, segId) {
-    if (this.status !== 'playing') throw new Err('The round is over.');
-    if (this.phase !== 'play') throw new Err(`The double ${this.engine} still has to turn up.`);
-    const p = this.current;
-    if (p.id !== playerId) throw new Err("It isn't your turn.");
+    const { p, train, seg, foot, attach, outer } = this.checkPlay(playerId, tile, trainId, segId);
+
+    p.hand.splice(p.hand.indexOf(tile), 1);
+    const target = this.attachTile(train, seg, foot, tile, attach, outer);
+    const footDone = this.settleFeet(seg, target, foot, tile, trainId, outer);
+
+    this.note(`${p.name} played ${label(tile)} on ${this.whose(train, p)}.`, 'play');
+    if (footDone) this.note(`The ${attach} foot filled up — it forks ${this.foot} ways now.`, 'round');
+
+    if (p.hand.length === 0) { this.finishRound(p.id); return; }
+    this.endTurn();
+  }
+
+  // Everything that can refuse a play, in roughly the order a player at the
+  // table would notice it: whose turn, whose tile, which train, which branch,
+  // then whether the tile actually fits. Throws Err, or hands back the pieces
+  // the play itself needs so they aren't looked up twice.
+  checkPlay(playerId, tile, trainId, segId) {
+    const p = this.requireTurn(playerId, 'play', `The double ${this.engine} still has to turn up.`);
     if (!p.hand.includes(tile)) throw new Err("That tile isn't in your hand.");
-    const train = this.train(trainId);
-    if (!train) throw new Err('Unknown train.');
-    const seg = this.seg(train, segId);
-    if (!seg) throw new Err('Unknown branch.');
+    const { train, seg } = this.locate(trainId, segId);
 
     if (!this.canPlayOn(p, train)) {
       if (!p.openingDone) throw new Err('Your first tile must start your own train.');
@@ -231,18 +270,18 @@ export class Game {
     }
     // A foot freezes its own branch only — playing anywhere else on the same
     // train stays legal, so an unfilled foot never holds up the whole line.
-    const openFoot = this.footOn(trainId, segId);   // only ever set when this.foot > 1
-    if (!openFoot && seg.closed) throw new Err('That branch has already forked.');
+    const foot = this.footOn(trainId, segId);   // only ever set when this.foot > 1
+    if (!foot && seg.closed) throw new Err('That branch has already forked.');
 
     const attach = seg.end;
     const [a, b] = parse(tile);
     if (a !== attach && b !== attach) throw new Err(`That tile doesn't match the open ${attach}.`);
-    const outer = a === attach ? b : a;
-    const foot = openFoot;
+    return { p, train, seg, foot, attach, outer: a === attach ? b : a };
+  }
 
-    p.hand.splice(p.hand.indexOf(tile), 1);
-
-    // Feeding a foot starts a fresh branch each time; ordinary play extends the line.
+  // Feeding a foot starts a fresh branch each time; ordinary play extends the
+  // line. Either way the tile lands on `target`, which is what carries on.
+  attachTile(train, seg, foot, tile, attach, outer) {
     let target = seg;
     if (foot) {
       target = { id: train.nextSeg++, parent: seg.id, from: attach, tiles: [], end: attach, closed: false };
@@ -252,7 +291,12 @@ export class Game {
     target.end = outer;
     this.lastPlay = { tile, trainId: train.id, segId: target.id };
     this.passStreak = 0;
+    return target;
+  }
 
+  // Book-keeping for pigeon feet: the one this tile just fed, and the new one it
+  // may itself have opened. Returns whether a foot filled up.
+  settleFeet(seg, target, foot, tile, trainId, outer) {
     let footDone = false;
     if (foot && ++foot.placed >= foot.need) {
       seg.closed = true;                        // the double's branch is spent; its toes carry on
@@ -261,23 +305,24 @@ export class Game {
     }
     // A double with a foot of 2 or 3 becomes a branch point that can take that
     // many tiles. With a foot of 1 it is simply a tile like any other.
-    if (a === b && this.foot > 1) {
+    if (isDouble(tile) && this.foot > 1) {
       this.pending.push({ train: trainId, seg: target.id, value: outer, need: this.foot, placed: 0 });
     }
+    return footDone;
+  }
 
-    const where = train.owner === null ? 'the Mexican train' : train.owner === p.id ? 'their train' : `${this.player(train.owner).name}'s train`;
-    this.note(`${p.name} played ${label(tile)} on ${where}.`, 'play');
-    if (footDone) this.note(`The ${attach} foot filled up — it forks ${this.foot} ways now.`, 'round');
-
-    if (p.hand.length === 0) { this.finishRound(p.id); return; }
-    this.endTurn();
+  // How the log refers to the train a tile just landed on.
+  whose(train, p) {
+    if (train.owner === null) return 'the Mexican train';
+    return train.owner === p.id ? 'their train' : `${this.player(train.owner).name}'s train`;
   }
 
   draw(playerId) {
     if (this.status !== 'playing') throw new Err('The round is over.');
+    // Drawing is the one action that means something in both phases, so the
+    // seeking case is a redirect rather than a refusal.
     if (this.phase === 'seeking') return this.seekDraw(playerId);
-    const p = this.current;
-    if (p.id !== playerId) throw new Err("It isn't your turn.");
+    const p = this.requireTurn(playerId, 'play', 'The round is over.');
     if (this.drewThisTurn) throw new Err('You already drew this turn.');
     if (!this.boneyard.length) throw new Err('The boneyard is empty.');
     if (this.legalMoves(p).length) throw new Err('You have a playable tile — you must play it.');
@@ -307,10 +352,7 @@ export class Game {
   }
 
   pass(playerId) {
-    if (this.status !== 'playing') throw new Err('The round is over.');
-    if (this.phase !== 'play') throw new Err('Draw for the engine first.');
-    const p = this.current;
-    if (p.id !== playerId) throw new Err("It isn't your turn.");
+    const p = this.requireTurn(playerId, 'play', 'Draw for the engine first.');
     if (this.legalMoves(p).length) throw new Err('You have a playable tile — you must play it.');
     if (this.boneyard.length && !this.drewThisTurn) throw new Err('You must draw first.');
     this.autoMark(p);
@@ -318,10 +360,7 @@ export class Game {
 
   // Markers are entirely the player's call, raised or lowered on their own turn.
   marker(playerId, up) {
-    if (this.status !== 'playing') throw new Err('The round is over.');
-    if (this.phase !== 'play') throw new Err('The round has not started.');
-    const p = this.current;
-    if (p.id !== playerId) throw new Err('You can only move your marker on your turn.');
+    const p = this.requireTurn(playerId, 'play', 'The round has not started.', 'You can only move your marker on your turn.');
     const train = this.train(playerId);
     if (train.open === !!up) return;
     train.open = !!up;

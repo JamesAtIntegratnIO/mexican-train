@@ -457,7 +457,12 @@ a { color: var(--dim); }
 .modal h2 { font-size: 21px; font-weight: 800; letter-spacing: -.02em; margin-bottom: 4px; }
 .modal .sub { color: var(--dim); font-size: 14px; margin-bottom: 20px; }
 .rules-list { display: grid; gap: 13px; font-size: 14px; color: var(--dim); line-height: 1.55; }
-.rules-list b { color: var(--text); display: block; font-size: 13px; text-transform: uppercase; letter-spacing: .07em; margin-bottom: 3px; }
+/* Bold used inside the prose is emphasis and stays inline — the pigeon-foot
+   entry bolds its tile counts mid-sentence, and a block rule here broke each
+   one onto its own line as if it were a new heading. */
+.rules-list b { color: var(--text); }
+/* An entry's heading is its leading <b>, and only that one. */
+.rules-list > div > b:first-child { display: block; font-size: 13px; text-transform: uppercase; letter-spacing: .07em; margin-bottom: 3px; }
 .table-scores { width: 100%; border-collapse: collapse; font-size: 14px; }
 .table-scores th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--dimmer); padding: 0 0 8px; font-weight: 700; }
 .table-scores td { padding: 9px 0; border-top: 1px solid var(--line-soft); font-variant-numeric: tabular-nums; }

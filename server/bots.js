@@ -52,57 +52,72 @@ function countEnds(hand) {
   return c;
 }
 
+// A move's score is a sum of independent considerations, each of which stands on
+// its own. Keeping them as separate functions means a weight can be read, argued
+// with and tuned without holding the rest of the arithmetic in your head.
 function score(game, me, mv, ends) {
+  const c = context(game, me, mv);
+  const shed = game.tileScore(mv.tile);
+  return shed * 1.2                                   // shedding pips is the whole game
+    + placement(me, c, ends)
+    + doubleValue(game, c)
+    + spite(game, c)
+    + (me.hand.length <= 4 ? shed * 1.5 : 0);         // late on, unload the heaviest first
+}
+
+// The facts about a move that several of the considerations below share.
+function context(game, me, mv) {
   const train = game.train(mv.train);
   const seg = game.seg(train, mv.seg);
   const foot = game.footOn(mv.train, mv.seg);
   const end = foot ? foot.value : seg.end;
   const [a, b] = parse(mv.tile);
-  const outer = a === end ? b : a;
   const dbl = isDouble(mv.tile);
+  return {
+    train, seg, foot, dbl,
+    outer: a === end ? b : a,
+    // Tiles still in hand that could cover this double if it were played.
+    cover: dbl ? me.hand.filter((t) => t !== mv.tile && parse(t).includes(a)).length : 0,
+    rival: train.owner !== me.id && train.owner !== null ? game.player(train.owner) : null,
+    // Temperament, rescaled: -1 fully friendly .. +1 fully aggressive.
+    aggro: ((me.temper ?? 0.5) - 0.5) * 2,
+  };
+}
 
-  // Shedding pips is the whole game — that's the baseline.
-  let s = game.tileScore(mv.tile) * 1.2;
-
+// Where to put it, ignoring who it hurts.
+function placement(me, { train, seg, outer }, ends) {
+  const followUps = ends[outer] || 0;
   if (train.owner === me.id) {
-    s += 14;                                   // getting your marker down is worth a lot
-    s += (ends[outer] || 0) * 3.5;             // ...and leaving an end you can follow up on
-    if (!seg.tiles.length) s += 6;             // get started early
-  } else if (train.owner === null) {
-    s += 4;                                    // Mexican train is a safe dumping ground
-  } else {
-    s += 7;                                    // dumping on an opponent's open train is better still
-    s -= (ends[outer] || 0) * 1.2;             // but don't hand them an end you wanted
+    return 14                        // getting your marker down is worth a lot
+      + followUps * 3.5              // ...and leaving an end you can follow up on
+      + (seg.tiles.length ? 0 : 6);  // get started early
   }
+  if (train.owner === null) return 4;              // a safe dumping ground
+  return 7 - followUps * 1.2;        // better still — but don't hand them an end you wanted
+}
 
-  const cover = dbl ? me.hand.filter((t) => t !== mv.tile && parse(t).includes(a)).length : 0;
+function doubleValue(game, { dbl, cover }) {
+  if (!dbl) return 0;
+  if (game.foot === 1) return cover > 0 ? 9 : -6;   // a double you can follow up on is worth more
+  return 4 + cover * 2;                             // a foot opens fresh ends you might use
+}
+
+// Everything that only matters because somebody else is on the receiving end.
+// On your own train and on the Mexican train there is nobody to be nasty to.
+function spite(game, { dbl, cover, foot, rival, aggro }) {
+  if (!rival) return 0;
+  let s = 0;
   if (dbl) {
-    if (game.foot === 1) s += cover > 0 ? 9 : -6;   // a double you can follow up on is worth more
-    else s += 4 + cover * 2;                        // a foot opens fresh ends you might use
+    // Dropping a double on an open train jams it — with pigeon feet it freezes
+    // the whole thing until several tiles land. The nastier bots love this.
+    s += aggro * (game.foot > 1 ? 24 : 11);
+    // Nastier still if they can't unstick it themselves, and a friendly bot
+    // would rather not strand a double on a neighbour at all.
+    if (!cover) s += aggro * 7 + aggro * 4;
+    if (rival.hand.length <= 4) s += aggro * 9;   // best of all against whoever is about to go out
   }
-
-  // ---- temperament: -1 fully friendly .. +1 fully aggressive ----
-  const aggro = ((me.temper ?? 0.5) - 0.5) * 2;
-  const rival = train.owner !== me.id && train.owner !== null ? game.player(train.owner) : null;
-
-  if (rival) {
-    if (dbl) {
-      // Dropping a double on an open train jams it — with pigeon feet it freezes
-      // the whole thing until several tiles land. The nastier bots love this.
-      s += aggro * (game.foot > 1 ? 24 : 11);
-      if (!cover) s += aggro * 7;                   // nastier still if you can't unstick it yourself
-      if (rival.hand.length <= 4) s += aggro * 9;   // and best of all against whoever is about to go out
-    }
-    // Feeding someone's foot frees their train up again. Friendly bots offer;
-    // aggressive ones leave them stewing.
-    if (foot) s -= aggro * 17;
-  }
-
-  // A friendly bot would rather not strand a double on a neighbour at all.
-  if (dbl && rival && !cover) s += aggro * 4;
-
-  // Late in the round, unload the heaviest tiles first.
-  if (me.hand.length <= 4) s += game.tileScore(mv.tile) * 1.5;
-
+  // Feeding someone's foot frees their train up again. Friendly bots offer;
+  // aggressive ones leave them stewing.
+  if (foot) s -= aggro * 17;
   return s;
 }

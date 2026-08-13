@@ -87,22 +87,38 @@ export class Room {
 
   join(conn, { pid, name, spectate }) {
     if (spectate) return this.watch(conn, { pid, name });
-    let p = pid && this.players.find((x) => x.id === pid);
-    if (p) {
-      if (p.conn && p.conn !== conn) this.adapter.close?.(p.conn, 4001, 'Reconnected elsewhere');
-      p.conn = conn; p.connected = true; p.bot = false;  // a returning human reclaims their seat from the bot
-      if (this.game) this.game.player(p.id).bot = false;
-      if (name) p.name = clean(name, p.name);
-    } else {
-      if (this.game) throw new Err('That game is already under way.');
-      if (this.players.length >= MAX_PLAYERS) throw new Err('This table is full (8 players).');
-      p = { id: rid(), name: clean(name, `Player ${this.players.length + 1}`), bot: false, conn, connected: true, lastSeen: Date.now() };
-      this.players.push(p);
-      this.say(`${p.name} joined.`);
-    }
+    const seat = pid && this.players.find((x) => x.id === pid);
+    const p = seat ? this.reclaimSeat(seat, conn, name) : this.takeSeat(conn, name);
     if (!this.hostId || !this.players.some((x) => x.id === this.hostId && x.connected && !x.bot)) this.reassignHost();
     this.emptySince = null;
     return p; // caller sends the identity message, then ticks — order matters to the client
+  }
+
+  // A second connection for an identity that is already at the table supersedes
+  // the first — a reload, or the same link opened in another tab. Shared by
+  // players and watchers, who reconnect on identical terms.
+  adopt(member, conn) {
+    if (member.conn && member.conn !== conn) this.adapter.close?.(member.conn, 4001, 'Reconnected elsewhere');
+    member.conn = conn;
+    member.connected = true;
+  }
+
+  // A returning human takes their seat back off the bot that stood in for them.
+  reclaimSeat(p, conn, name) {
+    this.adopt(p, conn);
+    p.bot = false;
+    if (this.game) this.game.player(p.id).bot = false;
+    if (name) p.name = clean(name, p.name);
+    return p;
+  }
+
+  takeSeat(conn, name) {
+    if (this.game) throw new Err('That game is already under way.');
+    if (this.players.length >= MAX_PLAYERS) throw new Err('This table is full (8 players).');
+    const p = { id: rid(), name: clean(name, `Player ${this.players.length + 1}`), bot: false, conn, connected: true, lastSeen: Date.now() };
+    this.players.push(p);
+    this.say(`${p.name} joined.`);
+    return p;
   }
 
   // Spectators may arrive at any point, including mid-game, but must say who
@@ -112,8 +128,8 @@ export class Room {
     if (!nm) throw new Err('Give a name before watching.');
     let w = pid && this.watchers.find((x) => x.id === pid);
     if (w) {
-      if (w.conn && w.conn !== conn) this.adapter.close?.(w.conn, 4001, 'Reconnected elsewhere');
-      w.conn = conn; w.connected = true; w.name = nm;
+      this.adopt(w, conn);
+      w.name = nm;
     } else {
       if (this.watchers.length >= MAX_WATCHERS) throw new Err('Too many people are watching already.');
       w = { id: rid(), name: nm, conn, connected: true, spectator: true };
@@ -271,38 +287,43 @@ export class Room {
     if (!g || g.status !== 'playing') return false;
     const seat = this.players.find((x) => x.id === g.current.id);
     if (!seat || (!seat.bot && seat.connected)) return false;
-    try {
-      const mv = chooseMove(g, seat.id);
-      // Markers are manual, so bots have to work theirs deliberately — and only
-      // while it is still their turn, hence before the move lands.
-      if (g.phase === 'play') {
-        if (mv.type === 'pass') g.marker(seat.id, true);
-        else if (mv.type === 'play' && mv.train === seat.id) g.marker(seat.id, false);
-      }
-      if (mv.type === 'engine') g.layEngine(seat.id);
-      else if (mv.type === 'play') g.play(seat.id, mv.tile, mv.train, mv.seg);
-      else if (mv.type === 'draw') g.draw(seat.id);
-      else g.pass(seat.id);
-    } catch (e) {
-      // A bot only ever picks from legalMoves(), so landing here means the rules
-      // engine contradicted itself — the one bug class worth waking up for.
-      // Log everything needed to rebuild the position, then give up the turn
-      // rather than let a bad move wedge the table.
-      // Throttled by the fault: a position the engine keeps mishandling comes
-      // round again every bot turn, and one line a minute says as much as
-      // hundreds would.
-      log.throttle('error', 'bot_move_failed', {
-        code: this.code, seat: seat.id, phase: g.phase, round: g.roundIndex,
-        boneyard: g.boneyard.length, hand: g.player(seat.id)?.hand.length, err: e,
-      }, `bot:${e?.message}`);
-      try { g.pass(seat.id); }
-      catch (e2) {
-        log.throttle('error', 'bot_pass_failed', { code: this.code, seat: seat.id, err: e2 }, `botpass:${e2?.message}`);
-        g.forceSkip(seat.id);
-      }
-    }
+    try { this.takeBotTurn(g, seat); }
+    catch (e) { this.botWedged(g, seat, e); }
     this.tick();
     return true;
+  }
+
+  takeBotTurn(g, seat) {
+    const mv = chooseMove(g, seat.id);
+    // Markers are manual, so bots have to work theirs deliberately — and only
+    // while it is still their turn, hence before the move lands.
+    if (g.phase === 'play') {
+      if (mv.type === 'pass') g.marker(seat.id, true);
+      else if (mv.type === 'play' && mv.train === seat.id) g.marker(seat.id, false);
+    }
+    if (mv.type === 'engine') g.layEngine(seat.id);
+    else if (mv.type === 'play') g.play(seat.id, mv.tile, mv.train, mv.seg);
+    else if (mv.type === 'draw') g.draw(seat.id);
+    else g.pass(seat.id);
+  }
+
+  // A bot only ever picks from legalMoves(), so landing here means the rules
+  // engine contradicted itself — the one bug class worth waking up for. Log
+  // everything needed to rebuild the position, then give up the turn rather than
+  // let a bad move wedge the table.
+  //
+  // Throttled by the fault: a position the engine keeps mishandling comes round
+  // again every bot turn, and one line a minute says as much as hundreds would.
+  botWedged(g, seat, e) {
+    log.throttle('error', 'bot_move_failed', {
+      code: this.code, seat: seat.id, phase: g.phase, round: g.roundIndex,
+      boneyard: g.boneyard.length, hand: g.player(seat.id)?.hand.length, err: e,
+    }, `bot:${e?.message}`);
+    try { g.pass(seat.id); }
+    catch (e2) {
+      log.throttle('error', 'bot_pass_failed', { code: this.code, seat: seat.id, err: e2 }, `botpass:${e2?.message}`);
+      g.forceSkip(seat.id);
+    }
   }
 
   // ------------------------------------------------------------------ lifetime

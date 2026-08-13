@@ -57,78 +57,103 @@ function forkScenario() {
 }
 forkScenario();
 
-for (const foot of [1, 2, 3]) {
-  for (const scoring of ['house', 'official', 'pips']) {
-    for (const max of [12, 9, 6]) {
-      for (const n of [2, 4, 8]) {
-        for (let rep = 0; rep < REPS; rep++) {
-          const players = Array.from({ length: n }, (_, i) => ({ id: 'p' + i, name: 'P' + i, bot: true, temper: randomTemper() }));
-          let g;
-          try { g = new Game({ players, max, foot, scoring }); }
-          catch { continue; }                       // set too small for this many seats
-          if (max === 6 && n === 8) continue;
-          games++;
-          let guard = 0;
+// ---------------------------------------------------------------- the sweep
 
-          while (g.status !== 'gameOver') {
-            if (++guard > 500_000) fail(`game did not terminate (foot=${foot} max=${max} n=${n})`);
+// Every rule combination the table can be set to, flattened. Nesting the sweep
+// around the thing being tested buries the game loop five levels deep and makes
+// the invariants harder to read than the loops that reach them. A double-6 set
+// can't seat 8 and still leave a boneyard, so that pairing is dropped rather
+// than played.
+const COMBOS = [1, 2, 3].flatMap((foot) =>
+  ['house', 'official', 'pips'].flatMap((scoring) =>
+    [12, 9, 6].flatMap((max) =>
+      [2, 4, 8].filter((n) => !(max === 6 && n === 8))
+        .map((n) => ({ foot, scoring, max, n })))));
 
-            if (g.status === 'roundOver') {
-              rounds++;
-              if (!g.roundWinner) blocked++;
-              if (!g.engineDown) fail('round ended without the engine ever being laid');
-              audit(g, max);
-              for (const p of g.players) {
-                if (p.roundScores.reduce((a, b) => a + b, 0) !== p.score) fail('score does not match its round history');
-                if (p.score < 0) fail('negative score');
-              }
-              g.startRound();
-              continue;
-            }
+for (const combo of COMBOS) {
+  for (let rep = 0; rep < REPS; rep++) playGame(combo);
+}
 
-            const id = g.current.id;
-            const me = g.player(id);
+function playGame({ foot, scoring, max, n }) {
+  const players = Array.from({ length: n }, (_, i) => ({ id: 'p' + i, name: 'P' + i, bot: true, temper: randomTemper() }));
+  let g;
+  try { g = new Game({ players, max, foot, scoring }); }
+  catch { return; }                       // set too small for this many seats
+  games++;
 
-            const offered = g.legalMoves(me);
+  let guard = 0;
+  while (g.status !== 'gameOver') {
+    if (++guard > 500_000) fail(`game did not terminate (foot=${foot} max=${max} n=${n})`);
+    if (g.status === 'roundOver') endRound(g, max);
+    else takeTurn(g, foot);
+  }
+}
 
-            // Nothing illegal may ever be offered.
-            for (const mv of offered) {
-              if (!g.canPlayOn(me, g.train(mv.train))) fail('offered a move on a train closed to that player');
-              const seg = g.seg(g.train(mv.train), mv.seg);
-              const f = g.footOn(mv.train, mv.seg);
-              // A foot binds its own branch: on that branch only toes may be played.
-              if (f && !parse(mv.tile).includes(f.value)) fail('offered a tile that does not feed the open foot');
-              if (!f && seg.closed) fail('offered a play on a branch that has already forked');
-            }
-            checkFeet(g, foot);
-            siblingChecks += checkSiblingsStayOpen(g, me, offered);
+function endRound(g, max) {
+  rounds++;
+  if (!g.roundWinner) blocked++;
+  if (!g.engineDown) fail('round ended without the engine ever being laid');
+  audit(g, max);
+  for (const p of g.players) {
+    if (p.roundScores.reduce((a, b) => a + b, 0) !== p.score) fail('score does not match its round history');
+    if (p.score < 0) fail('negative score');
+  }
+  g.startRound();
+}
 
-            // A spectator view must never carry anyone's hand.
-            const pub = g.view('nobody');
-            if (pub.hand.length || pub.moves.length) fail('public view leaked a hand');
+// One turn: check the position the player is handed, then make the move and
+// check what it did.
+function takeTurn(g, foot) {
+  const id = g.current.id;
+  const me = g.player(id);
+  checkPosition(g, me, foot);
 
-            const mv = chooseMove(g, id);
-            if (mv.type === 'engine') { g.layEngine(id); moves++; continue; }
-            if (g.phase === 'seeking') { g.draw(id); moves++; continue; }
-            if (mv.type !== 'play' && g.legalMoves(me).length) fail('drew or passed while holding a legal play');
+  const mv = chooseMove(g, id);
+  if (mv.type === 'engine') { g.layEngine(id); moves++; return; }
+  if (g.phase === 'seeking') { g.draw(id); moves++; return; }
+  if (mv.type !== 'play' && g.legalMoves(me).length) fail('drew or passed while holding a legal play');
+  applyMove(g, id, mv);
+}
 
-            if (mv.type === 'pass') g.marker(id, true);
-            else if (mv.type === 'play' && mv.train === id) g.marker(id, false);
+function checkPosition(g, me, foot) {
+  const offered = g.legalMoves(me);
+  checkOffers(g, me, offered);
+  checkFeet(g, foot);
+  siblingChecks += checkSiblingsStayOpen(g, me, offered);
 
-            // Snapshot the feet so the play can be checked against what it did
-            // to them: a filled foot has to fork its branch, exactly once.
-            const feetBefore = g.pending.map((f) => ({ ...f }));
+  // A spectator view must never carry anyone's hand.
+  const pub = g.view('nobody');
+  if (pub.hand.length || pub.moves.length) fail('public view leaked a hand');
+}
 
-            if (mv.type === 'play') g.play(id, mv.tile, mv.train, mv.seg);
-            else if (mv.type === 'draw') g.draw(id);
-            else g.pass(id);
-            moves++;
+function applyMove(g, id, mv) {
+  // Markers are manual, so the bot works its own while it is still its turn.
+  if (mv.type === 'pass') g.marker(id, true);
+  else if (mv.type === 'play' && mv.train === id) g.marker(id, false);
 
-            if (mv.type === 'play') checkFootTransition(g, feetBefore);
-          }
-        }
-      }
-    }
+  // Snapshot the feet so the play can be checked against what it did to them:
+  // a filled foot has to fork its branch, exactly once.
+  const feetBefore = g.pending.map((f) => ({ ...f }));
+
+  if (mv.type === 'play') g.play(id, mv.tile, mv.train, mv.seg);
+  else if (mv.type === 'draw') g.draw(id);
+  else g.pass(id);
+  moves++;
+
+  if (mv.type === 'play') checkFootTransition(g, feetBefore);
+}
+
+// ---------------------------------------------------------------- invariants
+
+// Nothing illegal may ever be offered.
+function checkOffers(g, me, offered) {
+  for (const mv of offered) {
+    if (!g.canPlayOn(me, g.train(mv.train))) fail('offered a move on a train closed to that player');
+    const seg = g.seg(g.train(mv.train), mv.seg);
+    const f = g.footOn(mv.train, mv.seg);
+    // A foot binds its own branch: on that branch only toes may be played.
+    if (f && !parse(mv.tile).includes(f.value)) fail('offered a tile that does not feed the open foot');
+    if (!f && seg.closed) fail('offered a play on a branch that has already forked');
   }
 }
 
@@ -204,21 +229,25 @@ function audit(g, max) {
   for (const p of g.players) for (const t of p.hand) claim(t);
   for (const tr of g.trains) {
     if (tr.segs.length > 1) forks++;
-    for (const s of tr.segs) {
-      let end = s.from;
-      for (const t of s.tiles) {
-        if (t.a !== end) fail(`broken chain: ${t.a} laid against open ${end}`);
-        const [a, b] = parse(t.tile);
-        if (!(a === t.a && b === t.b) && !(a === t.b && b === t.a)) fail('laid tile does not match its own id');
-        end = t.b;
-        claim(t.tile);
-      }
-      if (s.end !== end) fail('segment end disagrees with its last tile');
-    }
+    for (const s of tr.segs) auditChain(s, claim);
   }
   for (const t of g.boneyard) claim(t);
   const total = (max + 1) * (max + 2) / 2;
   if (seen.size !== total - 1) fail(`${seen.size} tiles accounted for, expected ${total - 1}`);
+}
+
+// A branch is a chain: every tile is laid against the end the tile before it
+// left open, and the branch's recorded end is where the last one finished.
+function auditChain(s, claim) {
+  let end = s.from;
+  for (const t of s.tiles) {
+    if (t.a !== end) fail(`broken chain: ${t.a} laid against open ${end}`);
+    const [a, b] = parse(t.tile);
+    if (!(a === t.a && b === t.b) && !(a === t.b && b === t.a)) fail('laid tile does not match its own id');
+    end = t.b;
+    claim(t.tile);
+  }
+  if (s.end !== end) fail('segment end disagrees with its last tile');
 }
 
 const secs = ((Date.now() - t0) / 1000).toFixed(1);
