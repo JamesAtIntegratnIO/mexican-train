@@ -75,7 +75,7 @@ function shellHTML(): string {
       <div class="handtools" id="handtools">
         <button class="btn sm" id="arrange" title="Drag tiles to reorder, tap one to turn it around">⇄ Arrange</button>
         <button class="btn sm ghost" id="divider" title="Drop a divider into your hand to keep planned runs apart" hidden>＋ Divider</button>
-        <span class="hint" id="arrangehint" hidden>drag to move · tap to turn · tap a divider to remove</span>
+        <span class="hint" id="arrangehint" hidden>drag to move · ⊟ stacks a set · tap to turn or undo</span>
         <button class="btn sm ghost" id="resort" title="Back to the dealt order, facing the usual way">Reset</button>
       </div>
     </footer>

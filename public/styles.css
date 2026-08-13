@@ -178,6 +178,12 @@ body.smalltiles .tile .pips { display: none !important; }
 }
 .tagline { text-align: center; color: var(--dim); font-size: 14.5px; margin-bottom: 26px; }
 .stack { display: grid; gap: 11px; }
+/* A table you can pick up again is a list row, not a compact control, and its
+   one-line summary is wider than a phone. Left to `nowrap` like every other
+   button it sets a minimum width the card cannot go below, and the whole front
+   door starts scrolling sideways. Block rather than flex, too, or the code and
+   the summary are two items that wrap past each other. */
+.btn[data-resume] { display: block; white-space: normal; }
 .divider { display: flex; align-items: center; gap: 12px; color: var(--dimmer); font-size: 12px; text-transform: uppercase; letter-spacing: .12em; margin: 20px 0; }
 .divider::before, .divider::after { content: ""; height: 1px; background: var(--line); flex: 1; }
 .row { display: flex; gap: 9px; }
@@ -410,6 +416,62 @@ a { color: var(--dim); }
 }
 .hand.arranging .sep::before { border-color: var(--gold); opacity: .8; }
 .hand .sep.dragging { background: var(--gold-soft); border-radius: 6px; }
+
+/* ---- a set you have stacked up ---- */
+/* A run is built in the order it will be played, so the tile that goes down
+   first lies on top and the rest fan out to its right underneath it, and the set
+   still reads left to right while taking half the room. Only that first tile is
+   whole; the sliver each of the others keeps is too narrow for a centred face,
+   so their numbers move over to it — the way a fanned hand of cards carries its
+   rank in the corner. Pips will not survive that crop at any size worth reading,
+   so a stack is numerals whatever the markings say.
+
+   `row-reverse` is what makes the leftmost tile the one on top: paint order
+   settles which tile covers which, and it can only run one way, so the tiles are
+   written out back to front and turned round here. */
+.hand .pile {
+  display: flex; flex-direction: row-reverse; flex: none; align-items: center;
+  border-radius: 10px; transition: transform .16s cubic-bezier(.2,.9,.3,1);
+}
+.hand .pile .tile { position: relative; }
+/* Every tile but the leftmost slides under its neighbour. The overlap alone is a
+   seam a pixel wide; the cast shadow is what makes one tile read as lying on top
+   of the next rather than butting up against it. */
+.hand .pile .tile:not(:last-child) {
+  margin-left: calc(var(--tw) * -.5);
+  box-shadow: var(--shadow), 0 0 0 1px rgba(0,0,0,.35), -6px 0 9px -4px rgba(0,0,0,.6);
+}
+.hand .pile .tile:not(.top) .num { display: block !important; }
+.hand .pile .tile:not(.top) .pips { display: none !important; }
+/* Small enough that the two-digit numbers of a double-12 set still clear the
+   overlap — anything larger and a 10 is cut in half by the tile lying over it. */
+.hand .pile .tile:not(.top) .half {
+  place-items: center end; padding-right: 6%; font-size: calc(var(--tw) * .29);
+}
+/* A tile you are pointing at or have picked comes out from under the pile whole. */
+.hand .pile .tile:hover, .hand .pile .tile.sel { z-index: 3; }
+.hand .pile .tile:hover .half, .hand .pile .tile.sel .half {
+  place-items: center; padding-right: 0; font-size: inherit;
+}
+/* Stacked, the set is the thing you drag, so a single tile must not act like one. */
+.hand.arranging .pile .tile:hover { transform: none; }
+.hand.arranging .pile:hover { transform: translateY(-3px); }
+
+/* The handle that folds a set up, and the one a stack keeps so it can be opened
+   again without going back into arrange mode. Glyph over count in a column, so
+   it costs a third of a tile rather than a whole one — it is standing where the
+   tiles it folded away used to be. */
+.hand .fold {
+  flex: none; align-self: center; min-width: calc(var(--tw) * .36); padding: 4px 2px;
+  display: grid; place-items: center; gap: 2px; cursor: pointer; line-height: 1;
+  font: inherit; font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums;
+  background: transparent; color: var(--dimmer);
+  border: 1px dashed var(--line); border-radius: 7px;
+}
+.hand .fold:hover { border-color: var(--gold); color: var(--gold); }
+.hand .pile .fold { border-style: solid; background: var(--surface); margin-left: 4px; }
+/* Mid-drag a handle belongs to a position that is about to change. */
+.hand.moving > .fold { visibility: hidden; }
 
 /* ---- arranging your hand ---- */
 .handtools { display: flex; gap: 7px; padding: 8px 12px 0; align-items: center; }
