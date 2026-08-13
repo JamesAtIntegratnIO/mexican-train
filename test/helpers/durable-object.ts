@@ -56,6 +56,24 @@ import type { Env } from '../../worker/env.js';
 
 export const DEFAULT_ENV = { EMPTY_GRACE_MIN: '15', IDLE_MIN: '30', LOG_LEVEL: 'error' } as unknown as Env;
 
+/** An env whose ASSETS binding behaves the way Cloudflare's does by default —
+ *  `html_handling: "auto-trailing-slash"`, under which the app shell lives at
+ *  `/` and asking for `/index.html` gets you a 307 back to it. Serving a shared
+ *  link means never handing that redirect to the browser, so the stand-in has
+ *  to redirect exactly where the real one does. */
+export const assetEnv = (): Env => ({
+  ...DEFAULT_ENV,
+  ASSETS: {
+    fetch: async (req: Request): Promise<Response> => {
+      const { pathname } = new URL(req.url);
+      if (pathname === '/index.html') return new Response(null, { status: 307, headers: { location: '/' } });
+      if (pathname === '/') return new Response('<!doctype html><title>Mexican Train</title>', { headers: { 'content-type': 'text/html; charset=utf-8' } });
+      if (pathname === '/app.js') return new Response('export {}', { headers: { 'content-type': 'text/javascript; charset=utf-8' } });
+      return new Response('Not found', { status: 404 });
+    },
+  },
+} as unknown as Env);
+
 // The constructor kicks off blockConcurrencyWhile, which can't be awaited from
 // a constructor — give it a turn before touching the object.
 export const settled = (): Promise<void> => new Promise((r) => setTimeout(r, 0));

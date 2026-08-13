@@ -8,6 +8,12 @@
 
 import type { RoomSnapshot, TileId, PlayerId } from '../shared/protocol.js';
 
+/** One slot in your hand's layout: a tile you hold, or a divider you dropped in
+ *  to keep planned runs apart. Divider ids are `|1`, `|2`, … — never a tile id,
+ *  which is always two numbers joined by a hyphen. Dividers are yours alone and
+ *  never go anywhere near the server. */
+export type HandItem = string;
+
 export interface ClientState {
   code: string | null;
   pid: PlayerId | null;
@@ -25,7 +31,7 @@ export interface ClientState {
   pipMode: boolean;
   expanded: Set<string>;
   spectate: boolean;
-  handOrder: TileId[];
+  handOrder: HandItem[];
   flipped: Set<TileId>;
   arrange: boolean;
   dragging: boolean;

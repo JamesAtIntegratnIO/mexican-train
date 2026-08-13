@@ -140,16 +140,26 @@ async function roomInfo(env: Env, pathname: string): Promise<Response> {
   return json(await res.json(), res.status);
 }
 
-// Everything else is the single-page app; /g/CODE resolves to index.html.
+// Everything else is the single-page app; /g/CODE resolves to the app shell so
+// a shared link opens that table.
+//
+// The shell is asked for as `/`, not `/index.html`. Under the assets binding's
+// default html_handling — auto-trailing-slash — `/index.html` is not a file you
+// can fetch: it answers 307 to `/`. That redirect used to be handed straight to
+// the browser, which followed it to the front door and dropped the code out of
+// the URL, so a shared link asked for a name and then for the code the link
+// already carried.
 async function assetRoute(request: Request, env: Env, url: URL): Promise<Response> {
   const assetReq = url.pathname.startsWith('/g/')
-    ? new Request(new URL('/index.html', url), request)
+    ? new Request(new URL('/', url), request)
     : request;
   const asset = await env.ASSETS.fetch(assetReq);
   const isHtml = (asset.headers.get('content-type') || '').includes('text/html');
   const out = new Response(asset.body, asset);
   for (const [k, v] of Object.entries(securityHeaders(isHtml))) out.headers.set(k, v);
-  out.headers.set('cache-control', isHtml ? 'no-cache' : 'public, max-age=3600');
+  // Only a file that was actually found is worth an hour in a browser cache. A
+  // redirect or a miss cached that long is a mistake you cannot take back.
+  out.headers.set('cache-control', isHtml || out.status >= 300 ? 'no-cache' : 'public, max-age=3600');
   return out;
 }
 

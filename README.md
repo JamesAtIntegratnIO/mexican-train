@@ -159,8 +159,8 @@ only when you have no legal play anywhere on the table.
 
 With a foot of 2 or 3, a double becomes a branch point that takes that many tiles,
 and **until every toe is down that whole train is frozen** — none of its branches
-can grow, not even ones that already forked. Once the foot fills, the branch forks
-into that many live ends.
+can grow, not the toes already laid and not ones that forked off an earlier double.
+Once the foot fills, the branch forks into that many live ends.
 
 The freeze is per-train, not table-wide. Every other train carries on as normal,
 and you are never forced to feed a foot instead of playing somewhere else. Put your
@@ -190,6 +190,12 @@ count.
   especially when you're close to going out — while an obliging one will feed
   your foot to set you free again. It's random, nobody can set it, and it's only
   revealed on the final scoreboard.
+- **Arranging your hand.** *Arrange* turns the hand into grab handles: drag a
+  tile to reorder it, tap one to turn it around so a planned run reads left to
+  right, and drop in *dividers* — half a tile wide — to keep the runs you are
+  planning for each branch apart. Tap a divider to take it out; *Reset* puts
+  everything back to the dealt order. It's a view of your own hand, so it works
+  on anybody's turn and never leaves your browser.
 - **Per-player display.** Tile size (a zoom slider — pips fall back to numerals
   once tiles get too small to read), numerals vs. pips, and sound on/off. All
   local preferences, so everyone at the table sets their own.

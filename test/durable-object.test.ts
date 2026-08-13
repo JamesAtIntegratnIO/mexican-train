@@ -6,7 +6,8 @@
 import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { RoomDO } from '../worker/room.js';
-import { fakeCtx, DEFAULT_ENV, settled, FakeWS } from './helpers/durable-object.js';
+import worker from '../worker/index.js';
+import { fakeCtx, DEFAULT_ENV, assetEnv, settled, FakeWS } from './helpers/durable-object.js';
 
 /** RoomDO takes runtime WebSockets; FakeWS implements the handful of methods it
  *  actually calls, so it is handed over explicitly rather than by accident. */
@@ -144,5 +145,31 @@ describe('hibernation', () => {
     await settled();
     await woken.webSocketMessage(asWS(host), JSON.stringify({ t: 'ping' }));
     assert.equal(host.last()?.t, 'pong');
+  });
+});
+
+// The front door of the Worker itself. A shared link is the only way anyone but
+// the host reaches a table, so what /g/CODE answers with is worth pinning.
+describe('serving the app', () => {
+  const get = (path: string) => worker.fetch(new Request(`https://mexicantrain.example${path}`), assetEnv());
+
+  test('a shared link serves the app itself, never a redirect', async () => {
+    const r = await get('/g/ABC123');
+    assert.equal(r.status, 200, 'a redirect here sends the player to the front door without their code');
+    assert.match(r.headers.get('content-type')!, /text\/html/);
+    assert.equal(r.headers.get('x-frame-options'), 'DENY');
+    assert.match(r.headers.get('content-security-policy')!, /default-src 'self'/);
+    assert.equal(r.headers.get('cache-control'), 'no-cache');
+  });
+
+  test('the front door is served the same way', async () => {
+    const r = await get('/');
+    assert.equal(r.status, 200);
+    assert.match(r.headers.get('content-type')!, /text\/html/);
+  });
+
+  test('static files are cacheable, and nothing else is', async () => {
+    assert.equal((await get('/app.js')).headers.get('cache-control'), 'public, max-age=3600');
+    assert.equal((await get('/nope.png')).headers.get('cache-control'), 'no-cache');
   });
 });

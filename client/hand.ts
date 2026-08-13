@@ -1,7 +1,8 @@
 // Your hand: how it is drawn, how you rearrange it, and what a tap means.
 //
-// Rearranging is a display preference — your own order, and which way round
-// each tile faces — so it works on anybody's turn and never leaves this browser.
+// Rearranging is a display preference — your own order, which way round each
+// tile faces, and where the dividers sit — so it works on anybody's turn and
+// never leaves this browser.
 
 import { $, toast } from './dom.js';
 import { S } from './state.js';
@@ -12,12 +13,21 @@ import { paintLanes } from './lanes.js';
 import { paintTurnbar } from './turnbar.js';
 import { playTile } from './actions.js';
 import type { GameView, TileId } from '../shared/protocol.js';
+import type { HandItem } from './state.js';
+
+/** Dividers are `|1`, `|2`, … and tiles are `3-9`, so the first character tells
+ *  them apart. The counter only has to outlast the arrangement it belongs to. */
+const isDivider = (h: HandItem): boolean => h.startsWith('|');
+let nextDivider = 1;
 
 // Your own arrangement, kept client-side. New tiles land on the end; tiles
-// you've played drop out; everything else keeps the order you set.
-function orderedHand(g: GameView): TileId[] {
+// you've played drop out; everything else keeps the order you set. Two dividers
+// left touching — the run between them has been played off — become one.
+function orderedHand(g: GameView): HandItem[] {
+  if (!g.hand.length) { S.handOrder = []; return []; }   // between rounds, dividers go too
   const inHand = new Set(g.hand);
-  const order = S.handOrder.filter((t) => inHand.has(t));
+  const kept = S.handOrder.filter((h) => isDivider(h) || inHand.has(h));
+  const order = kept.filter((h, i) => !isDivider(h) || !isDivider(kept[i - 1] ?? ''));
   const have = new Set(order);
   for (const t of g.hand) if (!have.has(t)) order.push(t);
   S.handOrder = order;
@@ -46,9 +56,17 @@ export function paintHand(g: GameView): void {
   el.dataset.sig = sig;
   el.classList.toggle('arranging', S.arrange);
   el.innerHTML = hand.length
-    ? hand.map((t) => tileHTML(t, 'p', tileClasses(t, { mustLay, yours, playable, prev }), S.flipped.has(t))).join('')
+    ? hand.map((h) => (isDivider(h)
+      ? dividerHTML(h)
+      : tileHTML(h, 'p', tileClasses(h, { mustLay, yours, playable, prev }), S.flipped.has(h)))).join('')
     : '<div class="hand-empty">Your hand is empty.</div>';
 }
+
+// Half a tile wide: enough for the break to read as deliberate, not so much
+// that a hand with three of them stops fitting on a phone.
+const dividerHTML = (id: HandItem): string =>
+  `<div class="sep item" data-sep="${id}" role="separator" aria-label="Divider"
+    ${S.arrange ? 'title="Drag to move it · tap to take it out"' : ''}></div>`;
 
 interface PaintFlags {
   mustLay: TileId | null;
@@ -59,6 +77,7 @@ interface PaintFlags {
 
 function tileClasses(t: TileId, { mustLay, yours, playable, prev }: PaintFlags): string {
   return [
+    'item',   // tiles and dividers alike are dragged around by the same code
     (mustLay ? t !== mustLay : yours && !playable.has(t)) && !S.arrange ? 'dead' : '',
     mustLay && t === mustLay ? 'sel' : '',
     S.sel === t ? 'sel' : '',
@@ -81,8 +100,15 @@ export function wireHandTools(): void {
     S.arrange = !S.arrange;
     (e.currentTarget as HTMLElement).classList.toggle('on', S.arrange);
     $('#arrangehint').hidden = !S.arrange;
+    $('#divider').hidden = !S.arrange;
     S.sel = null; Snd.tap();
     repaint(); paintLanes(S.room!.game!);
+  };
+  // A new divider goes on the end, where it is out of the way until you drag it
+  // between the two runs you want kept apart.
+  $('#divider').onclick = () => {
+    S.handOrder = [...orderedHand(S.room!.game!), `|${nextDivider++}`];
+    Snd.tap(); repaint();
   };
   $('#resort').onclick = () => { S.handOrder = []; S.flipped.clear(); Snd.tap(); repaint(); };
 }
@@ -95,7 +121,7 @@ function initHandDrag(): void {
 
   hand.addEventListener('pointerdown', (e: PointerEvent) => {
     if (!S.arrange) return;
-    const el = (e.target as Element).closest<HTMLElement>('.tile'); if (!el) return;
+    const el = (e.target as Element).closest<HTMLElement>('.item'); if (!el) return;
     e.preventDefault();
     drag = { el, x: e.clientX, moved: false };
     S.dragging = true;
@@ -121,7 +147,10 @@ function initHandDrag(): void {
 
     if (moved) {
       el.classList.remove('dragging');
-      S.handOrder = [...hand.querySelectorAll<HTMLElement>('.tile')].map((t) => t.dataset.tile!);
+      S.handOrder = [...hand.querySelectorAll<HTMLElement>('.item')].map((t) => t.dataset.tile ?? t.dataset.sep!);
+    } else if (el.dataset.sep) {
+      // A divider has nothing to turn around, so a tap takes it back out.
+      S.handOrder = S.handOrder.filter((h) => h !== el.dataset.sep);
     } else {
       // A tap turns the tile around: 7|9 becomes 9|7 so a planned run reads
       // left to right. Handled here rather than on `click`, because the
@@ -140,7 +169,7 @@ function initHandDrag(): void {
 // Move the node itself rather than repainting — smoother, and it keeps the
 // element reference alive for the rest of the gesture.
 function slideInto(hand: HTMLElement, el: HTMLElement, x: number): void {
-  for (const t of hand.querySelectorAll<HTMLElement>('.tile')) {
+  for (const t of hand.querySelectorAll<HTMLElement>('.item')) {
     if (t === el) continue;
     const r = t.getBoundingClientRect();
     if (x < r.left || x > r.right) continue;

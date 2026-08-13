@@ -10,7 +10,7 @@ import { S } from './state.js';
 import { Snd } from './sound.js';
 import { SEATC, laidHTML, markerHTML, avatar } from './tiles.js';
 import { playTile } from './actions.js';
-import type { GameView, TrainView, SegView } from '../shared/protocol.js';
+import type { GameView, TrainView, SegView, FootView } from '../shared/protocol.js';
 
 /** A branch with its depth in the fork tree, so the rail can be indented. */
 type PlacedSeg = SegView & { depth: number };
@@ -100,14 +100,18 @@ function paintBranches(el: Element, train: TrainView, g: GameView, live: Set<str
     for (const s of segs) delete S.laneN[train.id + ':' + s.id];
   }
 
+  // An unfilled foot freezes the whole train, so every branch but the one owing
+  // toes is shut — the rails say so rather than looking like ordinary open ends.
+  const frozen = segs.find((s) => s.foot)?.foot ?? null;
+
   for (const s of segs) {
     const rail = box.querySelector<HTMLElement>(`[data-seg="${s.id}"]`);
     const key = train.id + ':' + s.id;
-    if (rail) paintRail(rail, s, key, live.has(key));
+    if (rail) paintRail(rail, s, key, live.has(key), frozen);
   }
 }
 
-function paintRail(rail: HTMLElement, s: PlacedSeg, key: string, isLive: boolean): void {
+function paintRail(rail: HTMLElement, s: PlacedSeg, key: string, isLive: boolean, frozen: FootView | null): void {
   const tiles = rail.querySelector('.tiles')!;
   appendTiles(tiles, rail, s, key);
 
@@ -123,8 +127,9 @@ function paintRail(rail: HTMLElement, s: PlacedSeg, key: string, isLive: boolean
   // A forked branch can never be played on again — shrink it to a numeral-only
   // trail so live ends get the space. Click it to open it back up.
   rail.classList.toggle('trail', !!s.closed && !S.expanded.has(key));
+  rail.classList.toggle('frozen', !!frozen && !s.foot && !s.closed);
 
-  paintSlot(rail.querySelector('.slot') as HTMLElement, s);
+  paintSlot(rail.querySelector('.slot') as HTMLElement, s, frozen);
   if (isLive) requestAnimationFrame(() => rail.scrollIntoView({ block: 'nearest' }));
 }
 
@@ -142,17 +147,22 @@ function appendTiles(tiles: Element, rail: HTMLElement, s: PlacedSeg, key: strin
 }
 
 // The open end of a branch, and what it is waiting for.
-function paintSlot(slot: HTMLElement, s: PlacedSeg): void {
+function paintSlot(slot: HTMLElement, s: PlacedSeg, frozen: FootView | null): void {
   slot.hidden = !!s.closed;
   if (s.closed) return;
-  const owed = s.foot ? s.foot.need - s.foot.placed : 0;
   slot.classList.toggle('foot', !!s.foot);
   slot.innerHTML = `${s.end}${s.foot ? `<span class="need">${s.foot.placed}/${s.foot.need}</span>` : ''}`;
-  // A foot binds its own branch and nothing else, so the other branches of this
-  // train describe themselves as the ordinary open ends they are.
-  slot.title = s.foot
-    ? `${owed} more ${s.foot.value}${owed === 1 ? '' : 's'} to fill this foot — this branch takes nothing else until then`
+  // A foot holds up the whole train, so the branches that aren't owed anything
+  // say why they are shut instead of posing as ordinary open ends.
+  slot.title = s.foot ? `${owedPhrase(s.foot)} to fill this foot — nothing else on this train moves until then`
+    : frozen ? `Frozen — this train owes ${owedPhrase(frozen)} before any branch grows`
     : `Open end — needs a ${s.end}`;
+}
+
+// What an open foot is still owed, as a player would say it: "2 more 6s".
+function owedPhrase(f: FootView): string {
+  const owed = f.need - f.placed;
+  return `${owed} more ${f.value}${owed === 1 ? '' : 's'}`;
 }
 
 function laneShell(train: TrainView, g: GameView): string {
