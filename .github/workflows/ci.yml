@@ -1,0 +1,99 @@
+name: ci
+
+# Runs on pull requests and on main. Deploy is a separate workflow that repeats
+# these checks rather than depending on this one: a required-check dependency
+# across workflows is easy to get subtly wrong, and repeating a 30-second job is
+# cheaper than shipping past it.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# The default token is read/write; nothing here writes anything.
+permissions:
+  contents: read
+
+# A second push supersedes the first — nobody needs results for a commit that
+# has already been replaced. Not applied to main, where each commit is a
+# candidate for deployment.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  WRANGLER_VERSION: '4.93.0' # keep in step with deploy.yml and flake.nix
+
+jobs:
+  test:
+    name: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      # ws is the only dependency and the rules engine has none at all, so this
+      # is quick. `npm ci` also fails if package-lock.json has drifted, which is
+      # a check worth having on its own.
+      - name: Install
+        run: npm ci
+
+      - name: Tests
+        run: node --test test/*.test.mjs
+
+      # Kept separate from the tests so a rules failure is obvious in the job
+      # list rather than buried in a combined step.
+      - name: Rules engine soak
+        run: npm run soak -- 3
+
+  worker-config:
+    name: worker config
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # Bundles the Worker and validates wrangler.toml — bindings, migrations,
+      # the lot — without deploying. This is the check that would have caught a
+      # malformed binding before it reached a deploy, which is exactly how the
+      # rate-limit binding got added without local verification.
+      - name: Validate the Worker build and bindings
+        run: npx --yes wrangler@${{ env.WRANGLER_VERSION }} deploy --dry-run --outdir "$RUNNER_TEMP/worker-build"
+        env:
+          # A dry run needs no credentials; passing them anyway stops wrangler
+          # from trying an interactive login if that ever changes. Absent on
+          # pull requests from forks, which is fine — the dry run still works.
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+  docker:
+    name: container builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # The Node host is the fallback deployment target. Nothing else builds
+      # this image, so without a build here it can rot unnoticed for months.
+      - name: Build the image
+        run: docker build -t mexican-train:ci .
+
+      - name: Boot it and check it answers
+        run: |
+          docker run -d --name mt -p 3000:3000 mexican-train:ci
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:3000/api/health; then echo; ok=1; break; fi
+            sleep 1
+          done
+          docker logs mt
+          test "${ok:-0}" = 1 || { echo "::error::the container never became healthy"; exit 1; }
+          docker rm -f mt

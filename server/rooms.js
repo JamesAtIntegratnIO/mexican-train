@@ -5,7 +5,8 @@ import { Room, Err, newCode } from './room-core.js';
 import { log } from './log.js';
 
 export { Err };
-export const MAX_ROOMS = Number(process.env.MAX_ROOMS) || 500;
+// Same trap as PORT: `Number(x) || default` would read MAX_ROOMS=0 as 500.
+export const MAX_ROOMS = process.env.MAX_ROOMS ? Number(process.env.MAX_ROOMS) : 500;
 
 // A game of 13 rounds takes hours, so nothing expires while it is being played.
 const EMPTY_GRACE_MS = Number(process.env.EMPTY_GRACE_MIN || 15) * 60 * 1000;
