@@ -190,6 +190,12 @@ count.
   especially when you're close to going out — while an obliging one will feed
   your foot to set you free again. It's random, nobody can set it, and it's only
   revealed on the final scoreboard.
+- **Arranging your hand.** *Arrange* turns the hand into grab handles: drag a
+  tile to reorder it, tap one to turn it around so a planned run reads left to
+  right, and drop in *dividers* — half a tile wide — to keep the runs you are
+  planning for each branch apart. Tap a divider to take it out; *Reset* puts
+  everything back to the dealt order. It's a view of your own hand, so it works
+  on anybody's turn and never leaves your browser.
 - **Per-player display.** Tile size (a zoom slider — pips fall back to numerals
   once tiles get too small to read), numerals vs. pips, and sound on/off. All
   local preferences, so everyone at the table sets their own.

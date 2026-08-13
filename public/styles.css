@@ -396,6 +396,21 @@ a { color: var(--dim); }
 @keyframes dealt { from { opacity: 0; transform: translateY(26px) scale(.9); } }
 .hand-empty { color: var(--dimmer); font-size: 13px; padding: 18px 12px; }
 
+/* A divider you drop into your own hand to keep the runs you are planning apart.
+   Half a tile wide — enough that the break reads as deliberate, little enough
+   that a few of them still fit on a phone. Named `sep` rather than `divider`
+   because that class is already the labelled rule on the front door. */
+.hand .sep {
+  flex: none; align-self: stretch; width: calc(var(--tw) * .5);
+  display: grid; place-items: center;
+}
+.hand .sep::before {
+  content: ""; width: 0; height: calc(var(--tw) * 1.5);
+  border-left: 2px dashed var(--line); border-radius: 2px;
+}
+.hand.arranging .sep::before { border-color: var(--gold); opacity: .8; }
+.hand .sep.dragging { background: var(--gold-soft); border-radius: 6px; }
+
 /* ---- arranging your hand ---- */
 .handtools { display: flex; gap: 7px; padding: 8px 12px 0; align-items: center; }
 .handtools .hint { font-size: 12px; color: var(--dimmer); flex: 1; }
@@ -406,9 +421,9 @@ a { color: var(--dim); }
 /* In arrange mode the tiles are grab handles, so the browser must not claim the
    gesture for scrolling — hence touch-action, and hence the explicit mode. */
 .hand.arranging { cursor: grab; }
-.hand.arranging .tile { touch-action: none; cursor: grab; opacity: 1 !important; filter: none !important; }
+.hand.arranging .item { touch-action: none; cursor: grab; opacity: 1 !important; filter: none !important; }
 .hand.arranging .tile:hover { transform: translateY(-3px); }
-.hand .tile.dragging {
+.hand .item.dragging {
   cursor: grabbing; transform: translateY(-9px) scale(1.04); z-index: 2;
   box-shadow: var(--shadow), 0 0 0 2px var(--gold), 0 16px 30px -12px #000;
   transition: none;
