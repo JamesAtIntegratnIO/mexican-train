@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(npm run lint)",
+      "Bash(npm run types)",
+      "Bash(npm run build:*)",
+      "Bash(npm run build)",
+      "Bash(npm test)",
+      "Bash(npm run test:*)",
+      "Bash(npm run soak:*)",
+      "Bash(npm run soak)",
+      "Bash(npm run check)",
+      "Bash(npm run check:worker)",
+      "Bash(node --test dist/test/*.test.js)",
+      "Bash(node dist/scripts/soak.js:*)",
+      "Bash(npx eslint:*)",
+      "Bash(npx tsc:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git stash list)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run view:*)"
+    ],
+    "deny": [
+      "Bash(npm run cf:deploy:*)",
+      "Bash(npm run tf:apply:*)",
+      "Bash(wrangler deploy:*)",
+      "Bash(npx wrangler deploy:*)",
+      "Bash(npx wrangler rollback:*)",
+      "Bash(terraform apply:*)",
+      "Bash(fly deploy:*)"
+    ]
+  }
+}

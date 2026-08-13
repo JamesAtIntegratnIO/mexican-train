@@ -1,5 +1,5 @@
-// Mexican Train — client. Vanilla ES modules, no build step: the browser loads
-// these files directly, so what you debug is what shipped.
+// Mexican Train — client. Plain ES modules, bundled by esbuild into
+// public/app.js with a source map, so what you debug still reads as these files.
 //
 // The imports run strictly one way, top to bottom, and there are no cycles:
 //
