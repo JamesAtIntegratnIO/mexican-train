@@ -96,10 +96,47 @@ function refreezeOnALaterDouble(t: Table): void {
   if (!t.offered('3-9', 1)) fail('forks: the branch owing toes refused a toe');
 }
 
+// A marker is the player's own to move whether or not it is their turn. Playing
+// a tile ends the turn, so a marker that could only be moved on your own turn
+// would be stuck up for a whole lap of the table after the play that was meant
+// to bring it down — the one position where the manual marker was unplayable.
+// Whose marker it is, on the other hand, is still not negotiable.
+function markersMoveOutOfTurn(t: Table): void {
+  t.g.turn = 0;                         // A to play, so every move below is B's off-turn
+  const move = (up: boolean): void => {
+    try { t.g.marker('b', up); }
+    catch (e) { fail(`markers: B could not move their own marker off-turn — ${(e as Error).message}`); }
+  };
+  move(true);
+  if (!t.g.train('b')!.open) fail('markers: putting a marker up off-turn did nothing');
+  move(false);
+  if (t.g.train('b')!.open) fail('markers: taking a marker down off-turn did nothing');
+  let refused = false;
+  try { t.g.marker('nobody', true); } catch { refused = true; }
+  if (!refused) fail('markers: somebody who is not at the table moved a marker');
+}
+
+// A seat handed to somebody who was watching takes everything the seat owns
+// with it. A player's train is keyed by their id twice over and an open foot is
+// keyed by the train, so an identity that moves without all three leaves a
+// frozen train owing toes to a train that no longer exists — which no play can
+// then thaw. Pinned on the position above, which has a foot open on it.
+function reseatCarriesTheTrainAndItsToes(t: Table): void {
+  const owed = t.g.pending.filter((f) => f.train === 'a').length;
+  if (!owed) fail('reseat: the premise — this position is meant to have a foot open on train a');
+  t.g.reseat('a', 'z');
+  if (t.g.player('a') || !t.g.player('z')) fail('reseat: the seat kept the identity it was handed on from');
+  if (!t.g.train('z') || t.g.train('z')!.owner !== 'z') fail('reseat: the train did not come with the seat');
+  if (t.g.pending.some((f) => f.train === 'a')) fail('reseat: an open foot was left pointing at a train that has gone');
+  if (t.g.pending.filter((f) => f.train === 'z').length !== owed) fail('reseat: the toes the train was owed did not come with it');
+}
+
 const scripted = scriptedTable();
 freezeWhileFootIsShort(scripted);
 thawWhenFootFills(scripted);
 refreezeOnALaterDouble(scripted);
+markersMoveOutOfTurn(scripted);
+reseatCarriesTheTrainAndItsToes(scripted);   // last: it renames the seat the others are written against
 
 // ---------------------------------------------------------------- the sweep
 

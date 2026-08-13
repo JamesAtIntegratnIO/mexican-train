@@ -84,6 +84,14 @@ export class RoomDO {
     return {
       send: (conn: Conn, obj: unknown) => { try { (conn as WebSocket).send(JSON.stringify(obj)); } catch {} },
       close: (conn: Conn, code: number, reason: string) => { try { (conn as WebSocket).close(code, reason); } catch {} },
+      // A watcher given a seat: the attachment is this build's whole notion of
+      // who a socket is, and it has to survive hibernation, so it is rewritten
+      // rather than remembered anywhere else.
+      identify: (conn: Conn, id: PlayerId) => {
+        const ws = conn as WebSocket;
+        const att = (ws.deserializeAttachment() as Attachment | null) || {};
+        ws.serializeAttachment({ ...att, pid: id, spectator: false });
+      },
       cancelBot: () => { this.botAt = null; },
       scheduleBot: (delay: number) => { this.botAt = Date.now() + delay; },
     };

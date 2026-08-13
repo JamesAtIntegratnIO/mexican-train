@@ -3,7 +3,7 @@
 import { $, esc } from './dom.js';
 import { S } from './state.js';
 import { avatar } from './tiles.js';
-import { showScoreboard } from './modals.js';
+import { showScoreboard, handOver } from './modals.js';
 import type { RoomSnapshot, GameView, PlayerView, ChatLine } from '../shared/protocol.js';
 
 export function paintPanel(): void {
@@ -20,6 +20,9 @@ export function paintPanel(): void {
     body.innerHTML = scoresHTML(r, g);
     const sb = $<HTMLButtonElement>('#fullsb', body);
     if (sb) sb.onclick = () => showScoreboard(g);
+    body.querySelectorAll<HTMLElement>('[data-seat]').forEach((b) => {
+      b.onclick = () => handOver(b.dataset.seat!, b.dataset.nm!);
+    });
     return;
   }
   if (S.tab === 'log') {
@@ -66,9 +69,19 @@ function scoreRow(p: PlayerView, g: GameView): string {
       <div class="nm">${esc(p.name)}${p.id === S.pid ? ' (you)' : ''} ${p.bot ? '<span class="chip">bot</span>' : ''}</div>
       <div class="sub">${p.tiles === 1 ? '<span class="lastcall">last tile!</span>' : `${p.tiles} tiles in hand`}</div>
     </div>
+    ${handOverBtn(p)}
     <span class="dotstat ${p.connected ? 'on' : ''}" title="${p.connected ? 'connected' : 'away'}"></span>
     <span class="sc">${p.score}</span>
   </div>`;
+}
+
+// A seat nobody is sitting in is the host's to hand on, and this is where you
+// see that there is one — the turnbar only offers it once the table has
+// actually stopped on that seat, which may be a lap away.
+function handOverBtn(p: PlayerView): string {
+  if (S.room!.hostId !== S.pid || (!p.bot && p.connected)) return '';
+  return `<button class="icon-btn" data-seat="${esc(p.id)}" data-nm="${esc(p.name)}"
+    title="Hand this seat to a bot or to somebody watching">⇄</button>`;
 }
 
 const watchersHTML = (r: RoomSnapshot): string => (r.watchers.length

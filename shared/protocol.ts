@@ -204,6 +204,9 @@ export type ClientMessage =
   | { t: 'addBot' }
   | { t: 'remove'; id: PlayerId }
   | { t: 'fillSeat'; id: PlayerId }
+  /** Host only: hand the seat `id` — empty, or a bot's — to the watcher `to`,
+   *  who stops watching and inherits the hand it holds. */
+  | { t: 'giveSeat'; id: PlayerId; to: PlayerId }
   | { t: 'start' }
   | { t: 'nextRound' }
   | { t: 'playAgain' }

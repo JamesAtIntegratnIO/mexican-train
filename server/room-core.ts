@@ -47,6 +47,11 @@ export interface Watcher {
 export interface Adapter {
   send?(conn: Conn, obj: unknown): void;
   close?(conn: Conn, code: number, reason: string): void;
+  /** This socket is somebody else now — it was watching and has been given a
+   *  seat. Who a socket is, is the one thing the two hosts genuinely differ on
+   *  (a closure variable on Node, an attachment in the Durable Object), so
+   *  changing it has to be theirs to do rather than the room's. */
+  identify?(conn: Conn, id: PlayerId): void;
   scheduleBot?(delayMs: number): void;
   cancelBot?(): void;
   onChange?(): void;
@@ -79,12 +84,6 @@ export const MAX_PLAYERS = 8;
 export const MAX_WATCHERS = 20;
 
 export const BOT_DELAY: readonly [number, number] = [700, 1500];
-
-// How long the table waits for someone who dropped mid-turn before a bot plays
-// for them. Long enough to be a dead phone or a walk to the door rather than a
-// tunnel blinking, because having your hand played for you is the one thing
-// nobody can undo. A host who knows they aren't coming back has fillSeat().
-export const ABSENT_TAKEOVER_MS = 90_000;
 
 // Rejection sampling off crypto bytes — no modulo bias, and not guessable the
 // way Math.random() codes were. Web Crypto so it runs unchanged on Workers.
@@ -418,9 +417,56 @@ export class Room {
     this.tick();
   }
 
+  /** A seat is free to hand on if nobody is sitting in it: its player has
+   *  dropped, or it was only ever a bot. Never one somebody is playing. */
+  freeSeat(targetId: PlayerId): Seat {
+    const p = this.players.find((x) => x.id === targetId);
+    if (!p || (!p.bot && p.connected)) throw new Err('That seat is still occupied.');
+    return p;
+  }
+
+  // The other half of fillSeat(): rather than a bot, the seat goes to somebody
+  // who is watching — a friend taking over for the player whose phone died, or
+  // whoever turned up too late to be dealt in and has been waiting for a bot
+  // seat to take. The hand, the train and the score stay with the seat; what
+  // moves is who is in it, and the identity moves with them so that the player
+  // who left can no longer walk back into a seat somebody else is playing.
+  giveSeat(byId: PlayerId, targetId: PlayerId, watcherId: PlayerId): void {
+    this.requireHost(byId);
+    const p = this.freeSeat(targetId);
+    const w = this.watcher(watcherId);
+    if (!w || !w.conn) throw new Err('They have stopped watching.');
+
+    const was = p.name;
+    this.watchers = this.watchers.filter((x) => x !== w);
+    if (this.game) this.reseatInGame(p.id, w);
+    p.id = w.id; p.name = w.name; p.bot = false; delete p.temper;
+    p.conn = w.conn; p.connected = true; p.lastSeen = Date.now();
+    // The socket was watching a second ago and its own idea of who it is has to
+    // change with the seat, or its next message arrives as a spectator's.
+    this.adapter.identify?.(w.conn, p.id);
+    this.adapter.send?.(w.conn, { t: 'you', pid: p.id });
+    this.say(`${w.name} took over ${was}'s seat.`);
+    this.tick();
+  }
+
+  reseatInGame(from: PlayerId, w: Watcher): void {
+    const g = this.game!;
+    g.reseat(from, w.id);
+    const gp = g.player(w.id)!;
+    gp.name = w.name; gp.bot = false; delete gp.temper;
+  }
+
   // ------------------------------------------------------------------ automation
 
-  // Who, if anyone, the clock is waiting on — a bot, or someone who dropped.
+  // Who, if anyone, the clock is waiting on. Only ever a bot: nobody's hand is
+  // played for them because they went quiet. A socket drops for reasons that
+  // have nothing to do with the player — a locked phone, a lift, a tab the
+  // browser decided to suspend — and they are all indistinguishable here from
+  // someone who has left, so a timer cannot tell them apart either. The table
+  // waits instead, and says who it is waiting for; a host who knows somebody
+  // isn't coming back hands the seat over with fillSeat(), which is a decision
+  // somebody made rather than one a clock made for them.
   pendingSeat(): { seat: Seat; delay: number } | null {
     const g = this.game;
     if (!g || g.status !== 'playing') return null;
@@ -432,10 +478,8 @@ export class Room {
     // table open is for.
     if (!this.anyoneHere()) return null;
     const seat = this.players.find((x) => x.id === g.current.id);
-    if (!seat) return null;
-    const absent = !seat.bot && !seat.connected;
-    if (!seat.bot && !absent) return null;
-    return { seat, delay: absent ? ABSENT_TAKEOVER_MS : wait(BOT_DELAY) };
+    if (!seat || !seat.bot) return null;
+    return { seat, delay: wait(BOT_DELAY) };
   }
 
   schedule(): void {
@@ -453,7 +497,7 @@ export class Room {
     // A cancelled timer that fires anyway must not be able to play the game out.
     if (!this.anyoneHere()) return false;
     const seat = this.players.find((x) => x.id === g.current.id);
-    if (!seat || (!seat.bot && seat.connected)) return false;
+    if (!seat || !seat.bot) return false;
     try { this.takeBotTurn(g, seat); }
     catch (e) { this.botWedged(g, seat, e); }
     this.tick();

@@ -310,9 +310,25 @@ once everyone has gone, so bots used to take the table over and play the game
 out — holding the table open would have been pointless if you came back to a
 finished game. Nothing moves on an empty table.
 
-Somebody who drops mid-turn is waited on for 90 seconds before a bot covers for
-them, and the table says who it's waiting for. A host who knows they aren't
-coming back can hand the seat to a bot immediately.
+**Nobody's hand is played for them.** Somebody who drops mid-turn is waited on
+for as long as it takes, and the table says who it's waiting for. A socket goes
+down for reasons that say nothing at all about the player — a locked phone, a
+lift, a tab the browser decided to suspend — and none of those are separable
+here from someone who has walked off, so a timer cannot tell them apart either.
+It used to try: a bot took the seat over after 90 seconds, which meant sitting
+and watching your own hand be played on a bad connection, and that is the one
+thing at this table nobody can undo. Deciding that somebody isn't coming back is
+now a decision a person makes. The host gets the seat on the turn that is stuck,
+and in the players list before the table gets that far, and can hand it either
+to a bot — which only stands in, and gives the seat straight back the moment its
+player returns — or to somebody who is watching, who takes it over for good.
+
+A seat is the unit, not the player: the hand, the train and the score belong to
+it, and only who is sitting in it changes. Handing it to a spectator moves the
+seat's identity across with them, which is what stops the player who left from
+walking back into a seat somebody else is now playing — their browser's saved
+claim is nobody's, so they are turned away like any latecomer and offered the
+door again, where mid-game the only way in is to watch.
 
 Getting back in is a seat token in `localStorage`, so tables you still hold a
 seat at are listed on the front page — a game held overnight is no use if the
@@ -404,7 +420,13 @@ marker up and opponents get every one of your branches.
 50. Official: every blank half is 25, the 0|0 is 50. Just pips: straight dot
 count.
 
-*Markers are entirely manual* — raise or lower yours at any point in your turn.
+*Markers are entirely manual* — raise or lower yours at any point in the round,
+whether or not it is your turn. Nothing lowers it for you, and playing a tile
+ends your turn on the spot, so a marker you only ever got to move on your own
+turn would have to stay up for a full lap of the table after the play that
+should have brought it down. It is your train and your risk, so it is yours to
+move whenever you like. (The one time it moves by itself is when you genuinely
+can't play: being blocked raises it, because that is what the marker is for.)
 
 ## Notes
 
@@ -413,22 +435,33 @@ count.
   watching is left.
 - **Spectators** see the table and the activity log, but never anyone's hand —
   the server sends them the public view and rejects every game action. They have
-  to give a name, and the table lists who's watching.
+  to give a name, and the table lists who's watching. Someone who turned up too
+  late to be dealt in isn't stuck there: the host can give them any seat nobody
+  is sitting in — a bot's, or one whose player has dropped — and they inherit
+  the hand it holds.
 - **Rejoining.** Your seat is remembered in `localStorage`, so a refresh or a
   dropped phone puts you back in the same game — and so does coming back
   tomorrow, since the front page lists the tables you still hold a seat at.
   While the socket is down a banner says so, because everything on screen is
   stale until it comes back.
-- **Bots** fill empty seats, and cover for anyone who disconnects mid-turn after
-  90 seconds so a live game never stalls — the table says who it's waiting for
-  meanwhile, and the host can hand the seat over sooner. They give it back when
-  you return. On an empty table nothing moves at all: see
-  [Session lifetime](#session-lifetime).
+- **Bots** fill empty seats, and never take an occupied one. Someone who drops
+  mid-turn is waited on for as long as it takes — the table says who it's
+  waiting for, and if they aren't coming back the host hands the seat over,
+  to a bot or to somebody watching, rather than a clock doing it for them. A
+  bot gives the seat back when its player returns. On an empty table nothing
+  moves at all: see [Session lifetime](#session-lifetime).
 - **Bot temperament.** Every bot rolls a hidden disposition from obliging to
   ruthless. A ruthless one will drop a double on your open train to freeze it —
   especially when you're close to going out — while an obliging one will feed
   your foot to set you free again. It's random, nobody can set it, and it's only
   revealed on the final scoreboard.
+- **Playing a tile.** Tap one and the branches it will go on light up; tap one
+  of those to lay it. Or pick the tile up and carry it there — the same branches
+  light up, and once the tile is over one it turns to lie the way it will land,
+  matching end first. Let go anywhere else and the tile stays picked, so a carry
+  that missed can still be finished with a tap. On a phone the hand still scrolls
+  sideways under a finger; it is the lift *out* of it that carries a tile, and
+  holding one near the top or bottom of the board scrolls the lanes past it.
 - **Arranging your hand.** *Arrange* turns the hand into grab handles: drag a
   tile to reorder it, tap one to turn it around so a planned run reads left to
   right, and drop in *dividers* — half a tile wide — to keep the runs you are
@@ -488,6 +521,7 @@ client/                                    bundled to public/app.js
   net.ts         the socket and the reconnect ladder
   seats.ts       the tables this browser still holds a seat at
   actions.ts     committing a tile
+  lift.ts        carrying a tile from your hand to a branch
   lanes.ts       the board — one lane per train, one rail per branch
   modals.ts      rules, scoreboard, end of round
   lobby.ts       the pre-game table and its settings

@@ -12,6 +12,7 @@ import { send } from './net.js';
 import { paintLanes } from './lanes.js';
 import { paintTurnbar } from './turnbar.js';
 import { playTile } from './actions.js';
+import { initLift } from './lift.js';
 import type { GameView, TileId } from '../shared/protocol.js';
 import type { HandItem } from './state.js';
 
@@ -180,14 +181,18 @@ function tileClasses(t: TileId, { mustLay, yours, playable, prev }: PaintFlags):
 // ---------------------------------------------------------------- wiring
 
 export function wireHandTools(): void {
-  $('#hand').onclick = onHandClick;
-  initHandDrag();
-
   const repaint = () => {
     $<HTMLElement>('#hand').dataset.sig = '';
     paintHand(S.room!.game!);
     paintTurnbar(S.room!.game!);
   };
+
+  $('#hand').onclick = onHandClick;
+  initHandDrag();
+  // Lifting a tile onto the board moves the selection, so it repaints the board
+  // as well as the hand — it can't reach paintHand itself without a cycle.
+  initLift(() => { repaint(); paintLanes(S.room!.game!); });
+
   $('#arrange').onclick = (e: Event) => {
     S.arrange = !S.arrange;
     (e.currentTarget as HTMLElement).classList.toggle('on', S.arrange);
@@ -337,6 +342,9 @@ function slideIntoPile(pile: HTMLElement, el: HTMLElement, x: number): void {
 // ---------------------------------------------------------------- interaction
 
 function onHandClick(e: Event): void {
+  // A tile carried onto the board and back again would otherwise be un-picked
+  // by the click its own gesture leaves behind.
+  if (S.suppressClick) return;
   // The fold handles answer in either mode — a set you stacked while arranging
   // still has to be openable in the middle of your turn.
   const fold = (e.target as Element).closest<HTMLElement>('[data-fold]');

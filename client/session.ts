@@ -9,11 +9,18 @@ import { LOGO } from './tiles.js';
 import { renderLobby } from './lobby.js';
 import { renderTable } from './table.js';
 import { showEndModal } from './modals.js';
+import { rememberRole } from './seats.js';
 import type { RoomSnapshot, GameView } from '../shared/protocol.js';
 
 export function onRoom(m: RoomSnapshot): void {
   const prev = S.room;
   S.room = m;
+  // Whether you are watching is the table's answer, not this browser's: a
+  // spectator handed a seat is a player from the next snapshot on, and the
+  // remembered role has to move with them or a reload puts them back in the
+  // gallery while their hand sits at the table.
+  S.spectate = m.spectating;
+  rememberRole(m.code, m.spectating);
   // Lobby and table are different pages; the shell has to be rebuilt between them.
   if (!prev || prev.phase !== m.phase) S.built = false;
 

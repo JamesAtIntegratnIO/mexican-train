@@ -3,7 +3,8 @@
 
 import type { WebSocket } from 'ws';
 import { Room, Err, newCode } from './room-core.js';
-import type { Adapter, Conn, Limits } from './room-core.js';
+import type { Adapter, Conn, Limits, Seat, Watcher } from './room-core.js';
+import type { PlayerId } from '../shared/protocol.js';
 import { flagOn, num } from '../shared/flags.js';
 import { log } from './log.js';
 
@@ -26,6 +27,13 @@ const CHAT = flagOn(process.env.CHAT_ENABLED);
 
 export const rooms = new Map<string, Room>();
 
+/** Who a socket is, is a closure variable over in sockets.ts — which is exactly
+ *  where the room can't reach it, and a watcher handed a seat has to stop being
+ *  a watcher on the very socket they were watching from. This is the way back
+ *  in: sockets.ts files its session here, and `identify` below rewrites it.
+ *  Weak, so a closed socket takes its session with it. */
+export const sessionOf = new WeakMap<object, { me: Seat | Watcher | null }>();
+
 // Connections are the WebSocket objects themselves here — the core only ever
 // hands them back to us, so they can be anything.
 function nodeAdapter(getRoom: () => Room): Adapter {
@@ -39,6 +47,10 @@ function nodeAdapter(getRoom: () => Room): Adapter {
       try { ws.send(JSON.stringify(obj)); } catch {}
     },
     close(conn: Conn, code: number, reason: string) { try { (conn as WebSocket).close(code, reason); } catch {} },
+    identify(conn: Conn, id: PlayerId) {
+      const session = sessionOf.get(conn as object);
+      if (session) session.me = getRoom().member(id) ?? null;
+    },
     cancelBot() { if (timer) clearTimeout(timer); timer = null; },
     scheduleBot(delay: number) {
       if (timer) clearTimeout(timer);

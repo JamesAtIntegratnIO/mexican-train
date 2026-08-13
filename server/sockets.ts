@@ -19,7 +19,7 @@ interface Session {
   code: string;
   me: Seat | Watcher | null;
 }
-import { rooms } from './rooms.js';
+import { rooms, sessionOf } from './rooms.js';
 import { Err } from './game.js';
 import { dispatch } from './dispatch.js';
 import { log } from './log.js';
@@ -71,6 +71,7 @@ function openSession(ws: LiveSocket, req: IncomingMessage): void {
   // the same thing as a socket attachment. That difference is the whole reason
   // `join` is handled per host rather than in dispatch().
   const session: Session = { room, code, me: null };
+  sessionOf.set(ws, session);       // so a watcher given a seat can be told they are somebody else now
   const allow = floodGate();
 
   ws.on('message', (raw: RawData) => {

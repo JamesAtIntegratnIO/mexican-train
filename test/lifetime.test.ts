@@ -134,6 +134,99 @@ describe('the clock the bots run on', () => {
     assert.equal(JSON.stringify(room.game!.trains), before, 'the board moved after everyone left');
   });
 
+  // A socket drops for reasons that say nothing about the player — a locked
+  // phone, a lift, a tab the browser suspended — so the table waits rather than
+  // guessing. Having your hand played for you is the one thing at this table
+  // nobody can undo, and it used to happen ninety seconds after a dropped
+  // connection whether or not you were still sitting there.
+  test('a seat is never played for the person in it, however long they are gone', () => {
+    const { room, spy, ben, hostId } = tableInPlay();
+    room.leave(ben);                      // Ana is still here, so the clock is running
+    spy.scheduled.length = 0;
+    room.game!.turn = room.game!.players.findIndex((p) => p.id !== hostId);   // Ben to play
+    room.tick();
+
+    assert.equal(room.anyoneHere(), true, 'the premise: somebody is still at the table');
+    assert.equal(room.pendingSeat(), null, 'the clock took a seat its player never handed over');
+    assert.equal(room.runBot(), false, "a bot played an absent human's hand");
+    assert.equal(spy.scheduled.length, 0, 'a turn was scheduled for a seat nobody handed over');
+  });
+
+  // Which leaves the host to decide that somebody is not coming back. That is a
+  // decision made by a person, and a returning player takes the seat back.
+  test('the host can hand an empty seat over, and it comes back', () => {
+    const { room, ben, hostId } = tableInPlay();
+    const benId = room.players.find((p) => p.id !== hostId)!.id;
+    room.leave(ben);
+    room.fillSeat(hostId, benId);
+
+    assert.equal(room.players.find((p) => p.id === benId)!.bot, true, 'the seat was not handed over');
+    assert.equal(room.game!.player(benId)!.bot, true, 'the game still thinks that seat is human');
+
+    room.join(ben, { pid: benId, name: 'Ben' });
+    assert.equal(room.players.find((p) => p.id === benId)!.bot, false, 'Ben did not get his seat back');
+  });
+
+  test('a seat still occupied cannot be handed over', () => {
+    const { room, hostId } = tableInPlay();
+    const benId = room.players.find((p) => p.id !== hostId)!.id;
+    assert.throws(() => room.fillSeat(hostId, benId), /still occupied/);
+    const cara: Conn = { who: 'cara' };
+    const w = room.join(cara, { name: 'Cara', spectate: true });
+    assert.throws(() => room.giveSeat(hostId, benId, w.id), /still occupied/);
+  });
+
+  // The other half of it: a seat can go to somebody who is watching. What they
+  // inherit is the seat — its hand, its train and its score — so the one thing
+  // that must not survive is the old occupant's claim on it.
+  describe('handing a seat to somebody watching', () => {
+    function handedOver() {
+      const t = tableInPlay();
+      const seat = t.room.players.find((p) => p.id !== t.hostId)!;
+      const benId = seat.id;
+      const hand = [...t.room.game!.player(benId)!.hand];
+      const cara: Conn = { who: 'cara' };
+      const w = t.room.join(cara, { name: 'Cara', spectate: true });
+      t.room.leave(t.ben);
+      t.room.giveSeat(t.hostId, benId, w.id);
+      return { ...t, benId, caraId: w.id, cara, hand };
+    }
+
+    test('the hand, the train and the score come with the seat', () => {
+      const { room, caraId, hand } = handedOver();
+      const seat = room.players.find((p) => p.id === caraId);
+      assert.ok(seat, 'nobody is in the seat');
+      assert.equal(seat.name, 'Cara');
+      assert.equal(seat.bot, false);
+      assert.deepEqual(room.game!.player(caraId)!.hand, hand, "the seat's hand did not come with it");
+      assert.ok(room.game!.train(caraId), 'the train did not come with the seat');
+      assert.equal(room.game!.train(caraId)!.owner, caraId);
+    });
+
+    test('they stop being a watcher, and are one player rather than two', () => {
+      const { room, caraId, benId } = handedOver();
+      assert.equal(room.watchers.length, 0, 'they are still in the gallery as well');
+      assert.equal(room.players.length, 2, 'the table grew a seat');
+      assert.equal(room.game!.players.length, 2);
+      assert.equal(room.game!.player(benId), undefined, 'the old identity is still at the table');
+    });
+
+    // Ben's browser still remembers the seat, because nothing on this table can
+    // reach into it. The claim it remembers is simply no longer anybody's, so
+    // he is turned away like any latecomer — the client drops the dead seat on
+    // a refusal and offers him the door again, where mid-game the only way in
+    // is to watch.
+    test('the player who left cannot take the seat back off them', () => {
+      const { room, ben, benId, caraId, cara } = handedOver();
+
+      assert.throws(() => room.join(ben, { pid: benId, name: 'Ben' }), /already under way/);
+      assert.equal(room.players.length, 2, 'Ben was dealt back into a game already under way');
+      const seat = room.players.find((p) => p.id === caraId)!;
+      assert.equal(seat.name, 'Cara', 'Ben took the seat back off Cara');
+      assert.equal(seat.conn, cara, 'Cara lost the socket she was given the seat on');
+    });
+  });
+
   test('it starts again when somebody comes back', () => {
     const { room, spy, ana, ben, hostId } = tableInPlay();
     room.leave(ana);
