@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { rooms, createRoom, MAX_ROOMS } from './rooms.js';
 import { Err } from './game.js';
 import { log } from './log.js';
+import { metrics, isFunnelEvent } from './metrics.js';
 import { clientIp, originAllowed, rateLimiter, securityHeaders } from './security.js';
 
 // This file runs from two places: dist/server/http.js in the built tree, and
@@ -26,10 +27,19 @@ const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.cs
 // how you'd sweep for codes. Both are throttled per IP.
 const newRoomLimit = rateLimiter({ capacity: 5, perSec: 1 / 30 });   // ~2/min sustained
 const lookupLimit = rateLimiter({ capacity: 30, perSec: 1 });
+// A whole session sends a handful of funnel events, so this is generous and
+// still firmly bounded. Being cheap is the entire point of that endpoint, and a
+// bound is what keeps it cheap.
+const eventLimit = rateLimiter({ capacity: 20, perSec: 1 / 6 });     // ~10/min sustained
 
 export const json = (res: ServerResponse, req: IncomingMessage, status: number, body: unknown): void => {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...securityHeaders(req, false) });
   res.end(JSON.stringify(body));
+};
+
+const noContent = (res: ServerResponse, req: IncomingMessage): void => {
+  res.writeHead(204, securityHeaders(req, false));
+  res.end();
 };
 
 export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
@@ -46,11 +56,49 @@ function api(req: IncomingMessage, res: ServerResponse, url: URL): void {
   const ip = clientIp(req);
 
   if (url.pathname === '/api/new' && req.method === 'POST') return mintRoom(req, res, url, ip);
+  if (url.pathname === '/api/event' && req.method === 'POST') return trackEvent(req, res, url, ip);
   if (url.pathname === '/api/health') {
     return json(res, req, 200, { ok: true, rooms: rooms.size, max: MAX_ROOMS, uptime: Math.round(process.uptime()) });
   }
+  if (url.pathname === '/api/stats') return stats(req, res, ip);
   if (url.pathname.startsWith('/api/room/')) return roomInfo(req, res, url, ip);
   return json(res, req, 404, { error: 'Not found.' });
+}
+
+// Everything this process has counted since it started: tables cleared, people
+// who sat down, games finished, and the browser-side steps that never reach a
+// socket. Held in memory like everything else here, so a restart is a reset —
+// which is the honest shape for a server that keeps no database.
+//
+// The Workers build has no equivalent and shouldn't: its counters would be
+// per-isolate, so they go to Analytics Engine instead, which outlives them.
+function stats(req: IncomingMessage, res: ServerResponse, ip: string): void {
+  if (!lookupLimit(ip)) return json(res, req, 429, { error: 'Slow down.' });
+  return json(res, req, 200, {
+    ok: true,
+    uptime: Math.round(process.uptime()),
+    rooms: rooms.size,
+    counts: metrics.snapshot(),
+  });
+}
+
+// One counter increment, and deliberately nothing else: nothing is stored about
+// who sent it, and no log line is written — a stranger must not be able to run
+// up a logging bill by clicking. Refusals are counted instead, so a client
+// gone wrong is still visible in /api/stats.
+//
+// The event name rides in the query string because this server has no body
+// parser at all, and adding one for six characters would be the largest thing
+// in this file. POST rather than GET so a crawler, a prefetch or a link preview
+// can't inflate the count by visiting.
+function trackEvent(req: IncomingMessage, res: ServerResponse, url: URL, ip: string): void {
+  // Charged before the name is looked at, so a flood of junk names is throttled
+  // on the same budget as a flood of real ones.
+  if (!eventLimit(ip)) { metrics.refused(); return json(res, req, 429, { error: 'Slow down.' }); }
+  const e = url.searchParams.get('e') || '';
+  if (!isFunnelEvent(e)) { metrics.refused(); return json(res, req, 400, { error: 'Unknown event.' }); }
+  metrics.funnel(e);
+  return noContent(res, req);
 }
 
 function mintRoom(req: IncomingMessage, res: ServerResponse, url: URL, ip: string): void {

@@ -26,6 +26,38 @@ name = "NEW_ROOM_LIMIT"
 namespace_id = "1001"
 simple = { limit = 5, period = 60 }
 
+# Funnel events cost a counter and nothing else, so they get their own budget
+# rather than eating the one guarding table minting. A whole session sends a
+# handful, so this is already generous — and it is deliberately not more
+# generous than that, because on the free plan every event is also a data point
+# against a daily allowance that no per-IP limit can bound on its own.
+[[ratelimits]]
+name = "EVENT_LIMIT"
+namespace_id = "1002"
+simple = { limit = 20, period = 60 }
+
+# Usage telemetry. Analytics Engine is written to rather than logged, so a data
+# point per table costs nothing against the per-line logging bill — see
+# worker/analytics.ts for the column layout, which is the query contract.
+#
+# The free plan includes 100,000 data points a day and keeps them for three
+# months. A table costs one point and a whole session's funnel costs a handful,
+# so ordinary play is nowhere near it; a flood of funnel events is the only way
+# to get close. They are two datasets partly for that reason — dropping the
+# FUNNEL binding sheds the noisy half and leaves the table rows, which are the
+# ones worth having.
+#
+# Both are optional to the code: if your account cannot create these datasets,
+# delete these two blocks and everything else still deploys and runs, with no
+# usage telemetry on this build.
+[[analytics_engine_datasets]]
+binding = "TABLES"
+dataset = "mt_tables"
+
+[[analytics_engine_datasets]]
+binding = "FUNNEL"
+dataset = "mt_funnel"
+
 # Lets /api/health report which build answered, so a deploy can be confirmed.
 [version_metadata]
 binding = "CF_VERSION"

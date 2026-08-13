@@ -55,6 +55,52 @@ describe('http', () => {
   });
 });
 
+// What the browser reports about the steps before a socket exists — the people
+// who never reach a table and so never appear anywhere else.
+describe('the funnel endpoint', () => {
+  const counts = async (): Promise<Record<string, number>> =>
+    ((await fetch(`${srv.base}/api/stats`).then((r) => r.json())) as any).counts;
+  const event = (e: string) => fetch(`${srv.base}/api/event?e=${e}`, { method: 'POST' });
+
+  test('an event is counted, and answered with nothing at all', async () => {
+    const before = (await counts())['funnel.home'] ?? 0;
+    const r = await event('home');
+    assert.equal(r.status, 204);
+    assert.equal(await r.text(), '');
+    assert.equal((await counts())['funnel.home'], before + 1);
+  });
+
+  test('a name nobody agreed on is refused and counted as such', async () => {
+    const before = (await counts())['funnel.refused'] ?? 0;
+    const r = await event('please-count-something-else');
+    assert.equal(r.status, 400);
+    assert.equal((await counts())['funnel.refused'], before + 1);
+  });
+
+  test('a visit cannot inflate the count', async () => {
+    const before = (await counts())['funnel.home'] ?? 0;
+    // Crawlers, prefetchers and link previews all issue GETs. A counter that
+    // moves when a page is merely fetched is not counting people.
+    assert.equal((await fetch(`${srv.base}/api/event?e=home`)).status, 404);
+    assert.equal((await counts())['funnel.home'] ?? 0, before);
+  });
+
+  test('an event is never a log line', async () => {
+    const before = srv.logs.length;
+    for (let i = 0; i < 8; i++) await event('link');
+    await event('not-an-event');
+    assert.equal(srv.logs.length, before, 'a stranger clicking must not write to the log');
+  });
+
+  test('stats say what this process has seen', async () => {
+    const s: any = await fetch(`${srv.base}/api/stats`).then((r) => r.json());
+    assert.equal(s.ok, true);
+    assert.equal(typeof s.rooms, 'number');
+    assert.equal(typeof s.uptime, 'number');
+    assert.equal(typeof s.counts, 'object');
+  });
+});
+
 describe('joining', () => {
   test('a join is answered with an identity and a snapshot', async () => {
     const code = await newTable();

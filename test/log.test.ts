@@ -103,9 +103,11 @@ describe('the table lifecycle', () => {
     assert.equal(disposed.length, 1);
     assert.equal(captured.length, 1, 'the sweep should not also write a summary line');
     assert.equal(disposed[0].code, room.code);
-    assert.match(disposed[0].reason, /left this table/);
+    // A code, not the sentence the players are shown: this field is grouped by.
+    assert.equal(disposed[0].why, 'empty');
     assert.equal(typeof disposed[0].ageMin, 'number');
-    assert.equal(disposed[0].inGame, false, 'whether anyone actually played is the point of the line');
+    assert.equal(disposed[0].rounds, 0, 'whether anyone actually played is the point of the line');
+    assert.equal(disposed[0].finished, false);
   });
 
   test('a table still in play is never swept', () => {

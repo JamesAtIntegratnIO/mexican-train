@@ -16,6 +16,13 @@ export interface Env {
   /** The static site in public/. */
   ASSETS: Fetcher;
   NEW_ROOM_LIMIT?: RateLimiterBinding;
+  /** Funnel events are cheap enough to send often, so they get their own budget
+   *  rather than eating the one that guards table minting. */
+  EVENT_LIMIT?: RateLimiterBinding;
+  /** Usage telemetry. Optional so that a deploy can decline to collect it:
+   *  without these the app is unchanged and simply counts nothing. */
+  TABLES?: AnalyticsEngineDataset;
+  FUNNEL?: AnalyticsEngineDataset;
   CF_VERSION?: { id?: string };
   EMPTY_GRACE_MIN?: string;
   IDLE_MIN?: string;

@@ -15,6 +15,7 @@ import { Snd } from './sound.js';
 import { LOGO } from './tiles.js';
 import { connect } from './net.js';
 import { onRoom, fatal } from './session.js';
+import { track } from './track.js';
 import type { Hooks } from './net.js';
 
 /** What /api/room/CODE says about a table, or why it could not be reached. */
@@ -32,6 +33,10 @@ export function route(): void {
   const known = localStorage.getItem('mt.pid.' + S.code);
   if (known || S.direct === S.code) {
     S.spectate = localStorage.getItem('mt.role.' + S.code) === 'watch';
+    // Straight in, with no gate to pass: a reload, a reconnect, or the hop that
+    // follows making a table. The last of those has already said `made`, so
+    // only the ones arriving cold are worth a name of their own.
+    if (S.direct !== S.code) track('returned');
     connect(S.code, hooks); renderConnecting();
   } else {
     renderGate(S.code);
@@ -77,6 +82,10 @@ export function renderConnecting(what?: string): void {
 
 function renderHome(): void {
   S.built = false;
+  // A page view, not a person: coming back here from a table counts again. It
+  // is the denominator for "landed and never started", and that question is
+  // asked of visits.
+  track('home');
   app.innerHTML = `<div class="center"><div class="card">
     ${LOGO}
     <p class="tagline">Start a table, share the link, play. Nothing to install, nothing saved.</p>
@@ -120,6 +129,7 @@ async function startTable(): Promise<void> {
     if (r.ok && body?.code) {
       // You named yourself and you're plainly playing — there is nothing left
       // to ask, so skip the gate and open the lobby.
+      track('made');
       enterTable(body.code, S.name, false);
       return go('/g/' + body.code);          // go() repaints, so the button goes with it
     }
@@ -141,6 +151,7 @@ async function joinByCode(raw: string): Promise<void> {
   // A game already running is the one case with a question left in it: there
   // may be no seat to take. Let the gate put that choice properly.
   if (info.phase === 'game') return go('/g/' + c);
+  track('code');
   enterTable(c, S.name, false);
   go('/g/' + c);
 }
@@ -152,6 +163,9 @@ async function renderGate(code: string): Promise<void> {
   renderConnecting(`Looking up ${code}…`);
   const { info, why } = await lookupTable(code);
   if (!info) return fatal(why!);
+  // A shared link that found its table. The denominator for the gate: how many
+  // of these turn into someone at the table, and how many read it and leave.
+  track('link');
 
   const started = info!.phase === 'game';
   let spectate = started;                      // no seats left to take mid-game
@@ -174,6 +188,7 @@ async function renderGate(code: string): Promise<void> {
   const enter = () => {
     const nm = nameEl.value.trim();
     if (!nm) { nameEl.focus(); return toast('Enter a name first.', 'err'); }
+    track(spectate ? 'watch' : 'seat');
     enterTable(code, nm, spectate);
     connect(code, hooks); renderConnecting();
   };
