@@ -429,6 +429,18 @@ count.
   planning for each branch apart. Tap a divider to take it out; *Reset* puts
   everything back to the dealt order. It's a view of your own hand, so it works
   on anybody's turn and never leaves your browser.
+- **Stacking a set you have finished with.** A hand you have been arranging for
+  a while runs out of room long before the tiles run out. The ⊟ handle at the
+  end of a set folds it into a pile: the tile that goes down first lies on top
+  and the rest fan out to its right underneath, each keeping the sliver its
+  numbers move onto, so the run still reads in the order you built it in about
+  half the width. Stack the sets you are done with and leave the rest open —
+  it's per set, never all or nothing. A pile is one thing: it drags around as a
+  set, taking a divider either side of it wherever it lands, and a tap on it (or
+  on its ⊞ handle, which works outside arrange mode too) opens it up again. Drag
+  a tile onto a pile and it goes into the run at the gap you drop it on, so a set
+  can be added to without opening it first, and the tiles underneath keep their
+  slivers, so you can play straight out of a stack too.
 - **Per-player display.** Tile size (a zoom slider — pips fall back to numerals
   once tiles get too small to read), numerals vs. pips, and sound on/off. All
   local preferences, so everyone at the table sets their own.

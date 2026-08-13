@@ -32,6 +32,9 @@ export interface ClientState {
   expanded: Set<string>;
   spectate: boolean;
   handOrder: HandItem[];
+  /** The sets you have folded up, each held as the run of tiles it folded rather
+   *  than as a position, so a stack survives being dragged elsewhere. */
+  stacked: TileId[][];
   flipped: Set<TileId>;
   arrange: boolean;
   dragging: boolean;
@@ -57,7 +60,7 @@ export const S: ClientState = {
   sel: null, tab: 'scores', panel: false, unread: 0,
   pipMode: localStorage.getItem('mt.pips') === '1',
   expanded: new Set(), spectate: false,
-  handOrder: [], flipped: new Set(), arrange: false, dragging: false, suppressClick: false,
+  handOrder: [], stacked: [], flipped: new Set(), arrange: false, dragging: false, suppressClick: false,
   zoom: (() => { const z = Number(localStorage.getItem('mt.zoom')); return z >= 24 && z <= 76 ? z : 0; })(),
 
   // What the last snapshot looked like, so the next one can be compared against
