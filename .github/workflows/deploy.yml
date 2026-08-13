@@ -15,10 +15,15 @@ on:
       - 'worker/**'
       - 'server/**'
       - 'public/**'
+      - 'test/**'
       - 'scripts/soak.mjs'
       - 'wrangler.toml'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
+
+# Deploying needs the code and nothing else. The default token is read/write.
+permissions:
+  contents: read
 
 # One deploy at a time, and never cancel one midway — a half-applied Durable
 # Object migration is not something to leave lying around.
@@ -34,18 +39,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
+          cache: npm
 
-      # The rules engine is pure and dependency-free, so this needs no install.
+      - name: Install
+        run: npm ci
+
+      # ci.yml runs these too, on the pull request. Repeated here on purpose:
+      # main can be pushed to directly, and this is the last gate before the
+      # thing is live.
+      - name: Tests
+        run: node --test test/*.test.mjs
+
       - name: Check the rules engine still holds
-        run: node scripts/soak.mjs
+        run: node scripts/soak.mjs 3
 
       - name: Deploy
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

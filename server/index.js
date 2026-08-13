@@ -11,7 +11,9 @@ import { clientIp, originAllowed, rateLimiter, securityHeaders } from './securit
 
 setLevel(process.env.LOG_LEVEL);
 
-const PORT = Number(process.env.PORT) || 3000;
+// `Number(x) || default` would swallow PORT=0, which is the one way to ask the
+// OS for a free port — and it fails by quietly binding 3000 instead.
+const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -225,6 +227,9 @@ server.on('error', (err) => {
 });
 
 server.listen(PORT, HOST, () => {
-  log.info('listening', { port: PORT, host: HOST, maxRooms: MAX_ROOMS });
-  console.log(`\n  Mexican Train on http://localhost:${PORT}  (max ${MAX_ROOMS} tables)\n`);
+  // The bound port, not the requested one: PORT=0 asks the OS to pick, which is
+  // how the tests get a free port, and the log has to say which one it got.
+  const { port } = server.address();
+  log.info('listening', { port, host: HOST, maxRooms: MAX_ROOMS });
+  console.log(`\n  Mexican Train on http://localhost:${port}  (max ${MAX_ROOMS} tables)\n`);
 });
