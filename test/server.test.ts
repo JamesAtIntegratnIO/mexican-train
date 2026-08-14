@@ -284,3 +284,43 @@ describe('abuse controls', () => {
     assert.ok(after - before <= 1, `60 rejections wrote ${after - before} lines`);
   });
 });
+
+// Which caller a request is charged to. The key used to be the *first* entry of
+// x-forwarded-for, which is the one entry the caller writes for themselves: a
+// fresh value per request bought a fresh budget — and a fresh bucket in the
+// limiter's map to go with it — so every per-IP gate on this host was optional.
+// These run on their own servers because a limit is only visible once it bites,
+// and biting spends the shared one.
+describe('who a request is charged to', () => {
+  const mint = (base: string, headers: Record<string, string> = {}) =>
+    fetch(`${base}/api/new`, { method: 'POST', headers }).then((r) => r.status);
+
+  test('a forged x-forwarded-for buys no extra tables', async () => {
+    const own = await startServer();
+    try {
+      const seen: number[] = [];
+      for (let i = 0; i < 8; i++) seen.push(await mint(own.base, { 'x-forwarded-for': `203.0.113.${i}` }));
+      assert.ok(seen.includes(429), `eight invented addresses minted ${seen.filter((s) => s === 200).length} tables`);
+    } finally {
+      await own.stop();
+    }
+  });
+
+  // Where there is a proxy, the header is a list the caller starts and the proxy
+  // appends to, so the last entry is the only one that isn't the caller's to
+  // choose. It still has to be per-caller: one bucket for the whole world would
+  // be a way to lock everybody out rather than a limit.
+  test('behind a proxy, the hop the proxy wrote is the one that counts', async () => {
+    const own = await startServer({ TRUST_PROXY: '1' });
+    try {
+      const seen: number[] = [];
+      for (let i = 0; i < 8; i++) seen.push(await mint(own.base, { 'x-forwarded-for': `203.0.113.${i}, 198.51.100.7` }));
+      assert.ok(seen.includes(429), 'the caller chose their own budget by writing the head of the list');
+
+      assert.equal(await mint(own.base, { 'x-forwarded-for': '203.0.113.9, 198.51.100.8' }), 200,
+        "one busy caller spent everybody else's budget");
+    } finally {
+      await own.stop();
+    }
+  });
+});

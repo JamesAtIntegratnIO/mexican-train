@@ -3,19 +3,37 @@
 // so cheap requests must stay cheap.
 
 import type { IncomingMessage } from 'node:http';
+import { flagOn } from '../shared/flags.js';
 
 // Comma-separated hosts, e.g. "mexicantrain.fly.dev,train.example.com".
 // Left unset, only same-origin browser requests are accepted.
 const ALLOWED = (process.env.ALLOWED_ORIGINS || '')
   .split(',').map((s) => s.trim()).filter(Boolean);
 
-// Behind Fly/Render the client IP arrives in x-forwarded-for. That header is
-// forgeable if the process is ever exposed directly, so this is a throttle, not
-// an identity — never authorise anything with it.
+// Whether a reverse proxy stands in front of this process, and so whether its
+// forwarding header is worth reading at all. Off unless the deployment says so:
+// answering yes where there is no proxy hands every caller the keys to the
+// limiter, while answering no where there is one merely lumps everybody into a
+// single bucket. One of those mistakes is recoverable.
+const PROXIED = flagOn(process.env.TRUST_PROXY);
+
+// Which caller a request is charged to.
+//
+// x-forwarded-for is a list the caller starts and each hop appends to, so the
+// *first* entry is whatever the client typed. Reading it — which is what this
+// did — let anyone pick their own bucket by sending a fresh value per request:
+// no limit at all, and a map entry per forgery besides. A proxy appends the peer
+// it actually accepted the connection from, so the last entry is the only one
+// our own infrastructure vouched for and everything before it is the caller's
+// to invent. With nothing in front, the header says nothing and the socket is
+// the only honest answer.
+//
+// Still a throttle and not an identity — never authorise anything with it.
 export function clientIp(req: IncomingMessage): string {
-  const fwd = req.headers['x-forwarded-for'];
-  if (fwd) return String(fwd).split(',')[0].trim();
-  return req.socket?.remoteAddress || 'unknown';
+  const direct = req.socket?.remoteAddress || 'unknown';
+  if (!PROXIED) return direct;
+  const hops = String(req.headers['x-forwarded-for'] || '').split(',');
+  return hops[hops.length - 1].trim() || direct;
 }
 
 // Browsers always send Origin on cross-site requests and on every WS upgrade, so
