@@ -5,7 +5,7 @@ import { $, esc, modalEl, openModal, closeModal } from './dom.js';
 import { S } from './state.js';
 import { avatar } from './tiles.js';
 import { send } from './net.js';
-import { GAME_TITLE, SCORING_BLANKS, footRule, hubRule } from '../shared/phrasing.js';
+import { GAME_TITLE, SCORING_BLANKS, footRule, hubRule, temperName } from '../shared/phrasing.js';
 import type { Foot, GameView, Hub, PlayerView, PlayerId } from '../shared/protocol.js';
 
 /** What the card should describe. A table that has dealt knows for itself; one
@@ -102,10 +102,6 @@ export function confirmLeave(leave: () => void): void {
  *  question, and being unable to leave by the gesture you left with would be
  *  its own kind of trap. */
 export const askingToLeave = (): boolean => !modalEl.hidden && !!$('#leaveTable', modalEl);
-
-// Bots roll a hidden temperament; it's only ever revealed once the game is done.
-const temperName = (t: number): string => t < 0.2 ? 'obliging' : t < 0.4 ? 'good-natured' : t < 0.6 ? 'even-handed'
-  : t < 0.8 ? 'competitive' : 'ruthless';
 
 // Full card: a row per round played, a column per player, totals underneath.
 export function scoreboardHTML(g: GameView): string {

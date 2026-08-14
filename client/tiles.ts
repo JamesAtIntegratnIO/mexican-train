@@ -16,14 +16,14 @@ export const SEATC = ['#f0b429', '#38bdf8', '#34d399', '#f472b6', '#a78bfa', '#f
 export function tileHTML(id: TileId, cls = 'p', extra = '', flip = false): string {
   let [a, b] = id.split('-').map(Number);
   if (flip) [a, b] = [b, a];
-  return `<div class="tile ${cls}${a === b ? ' dbl' : ''} ${extra}" data-tile="${id}" aria-label="${a} ${b}"
+  return `<div class="tile ${cls}${a === b ? ' dbl' : ''} ${extra}" data-tile="${esc(id)}" aria-label="${a} ${b}"
     style="--c1:${NUMC[a]};--c2:${NUMC[b]}">${halfHTML(a)}${halfHTML(b)}</div>`;
 }
 
 // A laid tile knows its orientation: `a` is the end that connects, `b` is the new open end.
 export function laidHTML(t: LaidTile, extra = ''): string {
   const cls = t.a === t.b ? 'l dbl' : 'l';
-  return `<div class="tile ${cls} ${extra}" data-tile="${t.tile}" aria-label="${t.a} ${t.b}"
+  return `<div class="tile ${cls} ${extra}" data-tile="${esc(t.tile)}" aria-label="${t.a} ${t.b}"
     style="--c1:${NUMC[t.a]};--c2:${NUMC[t.b]}">${halfHTML(t.a)}${halfHTML(t.b)}</div>`;
 }
 

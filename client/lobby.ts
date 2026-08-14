@@ -82,7 +82,7 @@ function seatHTML(s: SeatView, i: number, r: RoomSnapshot, isHost: boolean): str
     <span class="nm">${esc(s.name)}${s.id === S.pid ? ' <span style="color:var(--dimmer);font-weight:400">(you)</span>' : ''}</span>
     ${s.bot ? '<span class="chip">bot</span>' : ''}
     ${s.id === r.hostId ? '<span class="chip gold">host</span>' : ''}
-    ${isHost && s.id !== S.pid ? `<button class="icon-btn" data-remove="${s.id}" title="Remove">✕</button>` : ''}
+    ${isHost && s.id !== S.pid ? `<button class="icon-btn" data-remove="${esc(s.id)}" title="Remove">✕</button>` : ''}
   </div>`;
 }
 

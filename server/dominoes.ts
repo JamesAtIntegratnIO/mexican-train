@@ -9,7 +9,6 @@
 import type { TileId } from '../shared/protocol.js';
 
 export const parse = (id: TileId): number[] => id.split('-').map(Number);
-export const pips = (id: TileId): number => { const [a, b] = parse(id); return a + b; };
 export const isDouble = (id: TileId): boolean => { const [a, b] = parse(id); return a === b; };
 
 /** How a tile reads in a log line: `"6 | 3"`. */
