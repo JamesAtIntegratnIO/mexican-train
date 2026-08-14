@@ -11,7 +11,7 @@ import { Snd } from './sound.js';
 import { tileHTML } from './tiles.js';
 import { send } from './net.js';
 import { savedHand, keepHand } from './seats.js';
-import { paintLanes } from './lanes.js';
+import { paintTable } from './boards.js';
 import { paintTurnbar } from './turnbar.js';
 import { playTile } from './actions.js';
 import { initLift } from './lift.js';
@@ -235,7 +235,7 @@ export function wireHandTools(): void {
   initHandDrag();
   // Lifting a tile onto the board moves the selection, so it repaints the board
   // as well as the hand — it can't reach paintHand itself without a cycle.
-  initLift(() => { repaint(); paintLanes(S.room!.game!); });
+  initLift(() => { repaint(); paintTable(S.room!.game!); });
 
   $('#arrange').onclick = (e: Event) => {
     S.arrange = !S.arrange;
@@ -243,7 +243,7 @@ export function wireHandTools(): void {
     $('#arrangehint').hidden = !S.arrange;
     $('#divider').hidden = !S.arrange;
     S.sel = null; Snd.tap();
-    repaint(); paintLanes(S.room!.game!);
+    repaint(); paintTable(S.room!.game!);
   };
   // A new divider goes on the end, where it is out of the way until you drag it
   // between the two runs you want kept apart.
@@ -460,7 +460,7 @@ function onTileClick(el: HTMLElement): void {
   // Tapping an already-selected tile with one legal home just plays it.
   if (S.sel === tile && targets.length === 1) return playTile(tile, targets[0]!.train, targets[0]!.seg);
   S.sel = S.sel === tile ? null : tile;
-  paintHand(g); paintLanes(g); paintTurnbar(g);
+  paintHand(g); paintTable(g); paintTurnbar(g);
 }
 
 // While the engine is still being hunted, the only tile that does anything is

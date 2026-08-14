@@ -17,11 +17,23 @@ export type PlayerId = string;
 /** A player's own id, or the literal `'mexican'` for the communal train. */
 export type TrainId = string;
 
+/** Which game is on the table. The two share a rules engine, a boneyard and a
+ *  descending round structure; they differ in whether a train belongs to
+ *  anybody, and in what a double demands. */
+export type GameName = 'mexicanTrain' | 'chickenFoot';
+
 export type Scoring = 'house' | 'official' | 'pips';
 
 /** How many tiles a double demands before its branch forks. 1 means a double is
  *  covered once and never forks. */
 export type Foot = 1 | 2 | 3;
+
+/** How many tiles ring the round's opening double in Chicken Foot before the
+ *  board opens up. Six is the common rule and four is the short version; some
+ *  groups play one, some the other, so the host picks. Means nothing in
+ *  Mexican Train, where the engine is a hub for trains rather than something to
+ *  be surrounded. */
+export type Hub = 4 | 6;
 
 export type Phase = 'seeking' | 'play';
 export type Status = 'idle' | 'playing' | 'roundOver' | 'gameOver';
@@ -91,6 +103,10 @@ export interface PlayerView {
   score: number;
   roundScores: number[];
   openingDone: boolean;
+  /** Whether a tile has gone down since this player's marker last went up, and
+   *  so whether they may take it down. Public because everyone at a real table
+   *  watched whether they played. */
+  playedSinceMark: boolean;
   connected: boolean;
   /** A bot's temperament, revealed only once the game is over. */
   temper?: number;
@@ -110,8 +126,12 @@ export interface LogLine {
 // ---------------------------------------------------------------- the game
 
 export interface GameView {
+  /** Which board the client should paint. The rest of this shape is common to
+   *  both games — a Chicken Foot table is one train, owned by nobody. */
+  game: GameName;
   max: number;
   foot: Foot;
+  hub: Hub;
   scoring: Scoring;
   round: number;
   totalRounds: number;
@@ -144,8 +164,10 @@ export interface EngineGameView extends Omit<GameView, 'players'> {
 // ---------------------------------------------------------------- the room
 
 export interface Settings {
+  game: GameName;
   max: number;
   foot: Foot;
+  hub: Hub;
   scoring: Scoring;
 }
 

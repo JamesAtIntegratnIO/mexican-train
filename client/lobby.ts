@@ -6,20 +6,17 @@ import { S } from './state.js';
 import { Snd } from './sound.js';
 import { LOGO, avatar } from './tiles.js';
 import { send } from './net.js';
+import { GAME_NOTE, GAME_TITLE, SCORING_BLANKS, footRule, hubNote, sentence } from '../shared/phrasing.js';
 import type { RoomSnapshot, SeatView, Settings } from '../shared/protocol.js';
 
 /** A picker's choices: the value sent to the server, and its label. */
 type Choice = [string | number, string];
 
+const GAMES: Choice[] = [['mexicanTrain', GAME_TITLE.mexicanTrain], ['chickenFoot', GAME_TITLE.chickenFoot]];
 const SETS: Choice[] = [[12, 'Double-12'], [9, 'Double-9'], [6, 'Double-6']];
+const RINGS: Choice[] = [[4, 'Four'], [6, 'Six']];
 const FEET: Choice[] = [[1, 'Cover once'], [2, '2 + fork'], [3, '3 + fork']];
 const SCORINGS: Choice[] = [['house', 'House'], ['official', 'Official'], ['pips', 'Just pips']];
-
-const SCORING_NOTE: Record<string, string> = {
-  house: 'Blank halves score 0, but getting caught with the 0|0 costs 50.',
-  official: 'Every blank half is 25, and the 0|0 is 50.',
-  pips: 'Straight dot count — blanks are worth nothing at all.',
-};
 
 export function renderLobby(): void {
   const r = S.room!, isHost = r.hostId === S.pid;
@@ -79,14 +76,23 @@ function hostControlsHTML(r: RoomSnapshot): string {
   const tooMany = r.seats.length > r.settings.seats;
   const setNote = `${r.settings.max + 1} rounds · ${r.settings.deal} tiles each · seats up to ${r.settings.seats}${
     tooMany ? ' <b style="color:var(--red)">— too many players for this set</b>' : ''}`;
-  const footNote = r.settings.foot === 1
-    ? 'A double just has to be covered by one tile before play carries on.'
-    : `A double takes ${r.settings.foot} tiles, then the train forks into ${r.settings.foot} live ends. Put your marker up and opponents get all of them.`;
+  // Chicken Foot fixes what a double demands, so offering the choice would be
+  // offering something the server is going to overrule.
+  const footPicker = r.settings.game === 'chickenFoot'
+    ? `<div><div class="label">Doubles</div><p class="foot-note" style="margin-top:0;text-align:left">${footRule(r.settings.foot, r.settings.game)}</p></div>`
+    : picker('foot', 'Doubles / pigeon foot', FEET, r.settings.foot, footRule(r.settings.foot, r.settings.game));
+
+  // Only Chicken Foot rings its opening double, so only Chicken Foot is asked.
+  const hubPicker = r.settings.game === 'chickenFoot'
+    ? picker('hub', 'Tiles round the opening double', RINGS, r.settings.hub, hubNote(r.settings.hub))
+    : '';
 
   return `<div id="hostsettings">
+      ${picker('game', 'Game', GAMES, r.settings.game, GAME_NOTE[r.settings.game])}
       ${picker('max', 'Domino set', SETS, r.settings.max, setNote)}
-      ${picker('foot', 'Doubles / pigeon foot', FEET, r.settings.foot, footNote)}
-      ${picker('scoring', 'Scoring', SCORINGS, r.settings.scoring, SCORING_NOTE[r.settings.scoring])}
+      ${hubPicker}
+      ${footPicker}
+      ${picker('scoring', 'Scoring', SCORINGS, r.settings.scoring, sentence(SCORING_BLANKS[r.settings.scoring]))}
     </div>
     <div class="row">
       <button class="btn" id="addbot" style="flex:1" ${r.seats.length >= 8 ? 'disabled' : ''}>+ Add bot</button>
@@ -120,8 +126,9 @@ function onSettingClick(e: Event): void {
   const b = (e.target as Element).closest<HTMLElement>('[data-set]');
   if (!b) return;
   const key = (b.parentElement as HTMLElement).dataset.key as keyof Settings;
-  // The set size and the foot are numbers on the wire; the scoring style is a
-  // name. Sending the wrong one is silently ignored by the server's whitelist.
-  const value = key === 'scoring' ? b.dataset.set! : Number(b.dataset.set);
+  // The set size and the foot are numbers on the wire; the game and the scoring
+  // style are names. Sending the wrong one is ignored by the server's whitelist.
+  const named = key === 'scoring' || key === 'game';
+  const value = named ? b.dataset.set! : Number(b.dataset.set);
   send({ t: 'settings', settings: { [key]: value } as Partial<Settings> });
 }

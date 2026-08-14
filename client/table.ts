@@ -1,6 +1,8 @@
 // The table shell: the chrome around the board, and the wiring that outlives a
-// repaint. The board is lanes.ts, your hand is hand.ts, the bar above it is
-// turnbar.ts and the side panel is panel.ts.
+// repaint. Your hand is hand.ts, the bar above it is turnbar.ts and the side
+// panel is panel.ts. The board is whichever game is on the table — lanes.ts
+// draws a train per player, board.ts draws the one shared board — and this is
+// the only place that chooses between them.
 //
 // The shell is built once per phase change and then painted in place, so every
 // paint function is written to be safe to call on every snapshot.
@@ -10,7 +12,7 @@ import { S } from './state.js';
 import { Snd } from './sound.js';
 import { tileHTML, applyZoom, applyPipMode, currentTw, PIP_FLOOR } from './tiles.js';
 import { send } from './net.js';
-import { paintLanes, onLaneClick } from './lanes.js';
+import { paintTable, boardClick } from './boards.js';
 import { showRules } from './modals.js';
 import { paintHand, wireHandTools } from './hand.js';
 import { paintTurnbar } from './turnbar.js';
@@ -26,7 +28,7 @@ export function renderTable(): void {
   $('#togglePanel').textContent = S.unread ? '☰•' : '☰';
   if (window.matchMedia('(min-width:900px)').matches) S.panel = true;
 
-  paintLanes(g);
+  paintTable(g);
   paintHand(g);
   paintTurnbar(g);
   paintPanel();
@@ -148,7 +150,9 @@ function wireControls(): void {
     if (i.value.trim()) send({ t: 'chat', text: i.value });
     i.value = '';
   };
-  $('#lanes').onclick = onLaneClick;
+  // The shell outlives a repaint but not a game, and a table never changes
+  // which game it is, so this is settled once.
+  $('#lanes').onclick = boardClick(S.room!.game!);
 }
 
 export function setPanel(open: boolean): void {

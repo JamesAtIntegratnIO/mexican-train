@@ -3,16 +3,20 @@
 //
 //   node dist/scripts/soak.js [gamesPerCombo]
 
-import { Game, parse, HUNT_ROUNDS } from '../server/game.js';
+import { Game, HUNT_ROUNDS } from '../server/game.js';
+import { parse } from '../server/dominoes.js';
+import { DEFAULT_HUB as DEFAULT_RING, HUBS, maxPlayersFor } from '../server/variants.js';
 import type { EnginePlayer, Seg, Train, PendingFoot } from '../server/game.js';
-import type { TileId, Foot, Scoring, PlayerId, Move } from '../shared/protocol.js';
+import type { TileId, Foot, Hub, Scoring, PlayerId, Move, GameName } from '../shared/protocol.js';
 import type { BotMove } from '../server/bots.js';
 
 import { chooseMove, randomTemper } from '../server/bots.js';
 
 /** One cell of the sweep: a table set up a particular way. */
 interface Combo {
+  game: GameName;
   foot: Foot;
+  hub: Hub;
   scoring: Scoring;
   max: number;
   n: number;
@@ -24,6 +28,9 @@ const fail = (m: string): never => { throw new Error(m); };
 let games = 0, rounds = 0, blocked = 0, moves = 0, forks = 0;
 let feetOpened = 0, feetFilled = 0, siblingChecks = 0;
 let hunt = 0, longestHunt = 0, huntedRounds = 0;
+let hubRounds = 0, hubsFilled = 0;
+let evenDeals = 0, shortLaps = 0, soloDraws = 0;
+const ringsSeen = new Set<number>();
 const t0 = Date.now();
 
 // ---------------------------------------------------------------- pigeon feet
@@ -103,17 +110,38 @@ function refreezeOnALaterDouble(t: Table): void {
 // Whose marker it is, on the other hand, is still not negotiable.
 function markersMoveOutOfTurn(t: Table): void {
   t.g.turn = 0;                         // A to play, so every move below is B's off-turn
-  const move = (up: boolean): void => {
-    try { t.g.marker('b', up); }
-    catch (e) { fail(`markers: B could not move their own marker off-turn — ${(e as Error).message}`); }
-  };
-  move(true);
+  const B = t.g.player('b')!;
+  B.playedSinceMark = true;
+  try { t.g.marker('b', true); }
+  catch (e) { fail(`markers: B could not put their own marker up off-turn — ${(e as Error).message}`); }
   if (!t.g.train('b')!.open) fail('markers: putting a marker up off-turn did nothing');
-  move(false);
+  try { t.g.marker('b', false); }
+  catch (e) { fail(`markers: B could not take their marker down after playing — ${(e as Error).message}`); }
   if (t.g.train('b')!.open) fail('markers: taking a marker down off-turn did nothing');
   let refused = false;
   try { t.g.marker('nobody', true); } catch { refused = true; }
   if (!refused) fail('markers: somebody who is not at the table moved a marker');
+}
+
+// A marker goes up because you could not play, and it is playing that earns it
+// back. Being able to take it straight down again would make it decorative:
+// the whole cost of being stuck is that the table gets a turn at your train.
+function markersNeedAPlayToComeDown(t: Table): void {
+  const B = t.g.player('b')!;
+  t.g.autoMark(B);                      // stuck: marker up, and the right to lower it gone
+  if (!t.g.train('b')!.open) fail('markers: being unable to play did not put the marker up');
+  if (B.playedSinceMark) fail('markers: being unable to play left the right to lower intact');
+  let refused = false;
+  try { t.g.marker('b', false); } catch { refused = true; }
+  if (!refused) fail('markers: a marker came down from a player who had not played');
+  if (!t.g.train('b')!.open) fail('markers: a refused lowering moved the marker anyway');
+  // ...and a tile going down hands it back.
+  t.g.turn = 1;
+  t.g.player('b')!.hand = ['12-12', '0-0'];
+  t.g.play('b', '12-12', 'b', 0);
+  try { t.g.marker('b', false); }
+  catch (e) { fail(`markers: playing a tile did not earn the marker back — ${(e as Error).message}`); }
+  if (t.g.train('b')!.open) fail('markers: the marker stayed up after a play and a lowering');
 }
 
 // A seat handed to somebody who was watching takes everything the seat owns
@@ -136,37 +164,45 @@ freezeWhileFootIsShort(scripted);
 thawWhenFootFills(scripted);
 refreezeOnALaterDouble(scripted);
 markersMoveOutOfTurn(scripted);
+markersNeedAPlayToComeDown(scripted);
 reseatCarriesTheTrainAndItsToes(scripted);   // last: it renames the seat the others are written against
 
 // ---------------------------------------------------------------- the sweep
 
 // Every rule combination the table can be set to, flattened. Nesting the sweep
 // around the thing being tested buries the game loop five levels deep and makes
-// the invariants harder to read than the loops that reach them. A double-6 set
-// can't seat 8 and still leave a boneyard, so that pairing is dropped rather
-// than played.
-const COMBOS: Combo[] = ([1, 2, 3] as Foot[]).flatMap((foot) =>
-  (['house', 'official', 'pips'] as Scoring[]).flatMap((scoring) =>
-    [12, 9, 6].flatMap((max) =>
-      [2, 4, 8].filter((n) => !(max === 6 && n === 8))
-        .map((n) => ({ foot, scoring, max, n })))));
+// the invariants harder to read than the loops that reach them. Seat counts a
+// set can't feed are dropped rather than played, and the two games disagree
+// about which those are — Chicken Foot deals deeper, so it seats fewer.
+//
+// Chicken Foot also fixes what a double demands, so sweeping the foot for it
+// would play the same table three times over.
+const COMBOS: Combo[] = (['mexicanTrain', 'chickenFoot'] as GameName[]).flatMap((game) =>
+  ((game === 'chickenFoot' ? [3] : [1, 2, 3]) as Foot[]).flatMap((foot) =>
+    // Only Chicken Foot rings its opening double, so only Chicken Foot sweeps
+    // the ring — the other game would play the same table three times.
+    (game === 'chickenFoot' ? HUBS : [DEFAULT_RING]).flatMap((hub) =>
+      (['house', 'official', 'pips'] as Scoring[]).flatMap((scoring) =>
+        [12, 9, 6].flatMap((max) =>
+          [2, 4, 8].filter((n) => n <= maxPlayersFor(game, max))
+            .map((n) => ({ game, foot, hub, scoring, max, n })))))));
 
 for (const combo of COMBOS) {
   for (let rep = 0; rep < REPS; rep++) playGame(combo);
 }
 
-function playGame({ foot, scoring, max, n }: Combo): void {
+function playGame({ game, foot, hub, scoring, max, n }: Combo): void {
   const players = Array.from({ length: n }, (_, i) => ({ id: 'p' + i, name: 'P' + i, bot: true, temper: randomTemper() }));
   let g;
-  try { g = new Game({ players, max, foot, scoring }); }
+  try { g = new Game({ players, game, max, foot, hub, scoring }); }
   catch { return; }                       // set too small for this many seats
   games++;
 
   let guard = 0;
   while (g.status !== 'gameOver') {
-    if (++guard > 500_000) fail(`game did not terminate (foot=${foot} max=${max} n=${n})`);
+    if (++guard > 500_000) fail(`game did not terminate (${game} foot=${foot} hub=${hub} max=${max} n=${n})`);
     if (g.status === 'roundOver') endRound(g, max);
-    else takeTurn(g, foot);
+    else takeTurn(g, g.foot);
   }
 }
 
@@ -174,6 +210,11 @@ function endRound(g: Game, max: number): void {
   rounds++;
   if (!g.roundWinner) blocked++;
   if (!g.engineDown) fail('round ended without the engine ever being laid');
+  if (g.variant.name === 'chickenFoot') {
+    hubRounds++;
+    if (g.trains[0].segs[0]!.closed) hubsFilled++;
+    ringsSeen.add(g.hub);
+  }
   audit(g, max);
   for (const p of g.players) {
     if (p.roundScores.reduce((a, b) => a + b, 0) !== p.score) fail('score does not match its round history');
@@ -190,7 +231,7 @@ function takeTurn(g: Game, foot: Foot): void {
   checkPosition(g, me, foot);
 
   const mv = chooseMove(g, id);
-  if (mv.type === 'engine') { g.layEngine(id); moves++; checkHunt(g); return; }
+  if (mv.type === 'engine') { checkEvenHands(g); g.layEngine(id); moves++; checkHunt(g); return; }
   if (g.phase === 'seeking') { g.draw(id); moves++; hunt++; return; }
   if (mv.type !== 'play' && g.legalMoves(me).length) fail('drew or passed while holding a legal play');
   applyMove(g, id, mv);
@@ -203,17 +244,32 @@ function takeTurn(g: Game, foot: Foot): void {
 // reaches is a ceiling that could have gone missing unnoticed, so the longest
 // hunt seen is reported and a run that never had to hunt at all is a failure.
 function checkHunt(g: Game): void {
-  const passes = Math.ceil(hunt / g.players.length);
-  if (passes > HUNT_ROUNDS[1]) fail(`the hunt for the double ran ${passes} times round the table`);
+  // One draw during the hunt is one time round the table — everybody draws at
+  // once — so the count of draws is already the count of passes.
+  if (hunt > HUNT_ROUNDS[1]) fail(`the hunt for the double ran ${hunt} times round the table`);
   if (hunt) huntedRounds++;
-  longestHunt = Math.max(longestHunt, passes);
+  longestHunt = Math.max(longestHunt, hunt);
   hunt = 0;
+}
+
+// Everybody draws at once and keeps what they get, so when the engine finally
+// goes down every hand is the same size. That is the whole point of the rule:
+// drawing one at a time round the table left the table holding uneven hands
+// before a tile had been played, which is a scoring difference nobody chose.
+// A hand one short is allowed only where the boneyard ran out mid-lap.
+function checkEvenHands(g: Game): void {
+  const sizes = g.players.map((p) => p.hand.length);
+  const spread = Math.max(...sizes) - Math.min(...sizes);
+  if (!spread) { evenDeals++; return; }
+  if (spread === 1 && !g.boneyard.length) { shortLaps++; return; }
+  fail(`hands differ by ${spread} when the engine went down, with ${g.boneyard.length} left in the yard`);
 }
 
 function checkPosition(g: Game, me: EnginePlayer, foot: Foot): void {
   const offered = g.legalMoves(me);
   checkOffers(g, me, offered);
   checkFeet(g, foot);
+  checkBoard(g);
   siblingChecks += checkSiblingsStayShut(g, me, offered);
 
   // A spectator view must never carry anyone's hand.
@@ -222,13 +278,10 @@ function checkPosition(g: Game, me: EnginePlayer, foot: Foot): void {
 }
 
 function applyMove(g: Game, id: PlayerId, mv: BotMove): void {
-  // Markers are manual, so the bot works its own while it is still its turn.
-  if (mv.type === 'pass') g.marker(id, true);
-  else if (mv.type === 'play' && mv.train === id) g.marker(id, false);
-
   // Snapshot the feet so the play can be checked against what it did to them:
   // a filled foot has to fork its branch, exactly once.
   const feetBefore = g.pending.map((f) => ({ ...f }));
+  const handsBefore = g.players.map((p) => p.hand.length);
 
   if (mv.type === 'play') g.play(id, mv.tile, mv.train, mv.seg);
   else if (mv.type === 'draw') g.draw(id);
@@ -236,6 +289,28 @@ function applyMove(g: Game, id: PlayerId, mv: BotMove): void {
   moves++;
 
   if (mv.type === 'play') checkFootTransition(g, feetBefore);
+  if (mv.type === 'draw') checkDrewAlone(g, handsBefore);
+
+  // Markers are manual, so the bot works its own — after the play, because a
+  // marker cannot come down until a tile has gone down. Not once the round has
+  // ended on that very play, which is when a marker stops meaning anything.
+  // Chicken Foot has none: no train belongs to anybody to be opened.
+  if (mv.type === 'play' && g.variant.markers && g.status === 'playing') g.marker(id, false);
+}
+
+// Everybody drawing at once belongs to the hunt for the round's double and
+// nowhere else. Once the engine is down a draw is one player's business —
+// you take a single tile, play it if it goes, and your turn ends if it does
+// not — and that is true of a frozen foot like anything else: the board being
+// stuck on one value does not make it the table's draw. If the communal draw
+// ever leaked past the opening phase, every hand would grow on one player's
+// turn and the boneyard would empty several times too fast.
+function checkDrewAlone(g: Game, before: number[]): void {
+  const grew = g.players.filter((p, i) => p.hand.length !== before[i]);
+  if (grew.length !== 1) fail(`a draw during play changed ${grew.length} hands, not one`);
+  const i = g.players.indexOf(grew[0]!);
+  if (g.players[i]!.hand.length !== before[i]! + 1) fail('a draw during play was not exactly one tile');
+  soloDraws++;
 }
 
 // ---------------------------------------------------------------- invariants
@@ -259,16 +334,31 @@ function checkOffers(g: Game, me: EnginePlayer, offered: Move[]): void {
 // pointing at a spent branch would freeze that train for the rest of the round.
 function checkFeet(g: Game, foot: Foot): void {
   if (foot < 2 && g.pending.length) fail('feet opened on a table that covers doubles once');
-  for (const f of g.pending) {
-    const train = g.train(f.train);
-    if (!train) return fail('an open foot names a train that does not exist');
-    const seg = g.seg(train!, f.seg);
-    if (!seg) return fail('an open foot names a branch that does not exist');
-    if (seg.closed) fail('an open foot sits on a branch that has already forked');
-    if (f.value !== seg.end) fail(`foot wants ${f.value} but its branch ends on ${seg.end}`);
-    if (f.placed >= f.need) fail('a foot is still open with all its toes down');
-    if (f.need !== foot) fail(`foot needs ${f.need} toes, table is set to ${foot}`);
-  }
+  for (const f of g.pending) checkFoot(g, f, foot);
+}
+
+function checkFoot(g: Game, f: PendingFoot, foot: Foot): void {
+  // The Chicken Foot hub is a foot like any other, just a bigger one: the
+  // opening double wants however many the host chose to ring it with, where
+  // every later double wants three.
+  const want = g.variant.name === 'chickenFoot' && f.seg === 0 ? g.hub : foot;
+  if (f.need !== want) fail(`foot needs ${f.need} toes, expected ${want}`);
+  const train = g.train(f.train);
+  if (!train) return fail('an open foot names a train that does not exist');
+  const seg = g.seg(train, f.seg);
+  if (!seg) return fail('an open foot names a branch that does not exist');
+  if (seg.closed) fail('an open foot sits on a branch that has already forked');
+  if (f.value !== seg.end) fail(`foot wants ${f.value} but its branch ends on ${seg.end}`);
+  if (f.placed >= f.need) fail('a foot is still open with all its toes down');
+}
+
+// Chicken Foot is one board and nobody's. If a second train ever appeared, the
+// per-train freeze the engine implements would stop being the whole-board
+// freeze the game requires, and every other check here would still pass.
+function checkBoard(g: Game): void {
+  if (g.variant.name !== 'chickenFoot') return;
+  if (g.trains.length !== 1) fail(`chicken foot grew ${g.trains.length} trains`);
+  if (g.trains[0].owner !== null) fail('the chicken foot board belongs to somebody');
 }
 
 // The rule the table cares about: a foot freezes its whole train. So whenever
@@ -359,6 +449,12 @@ function auditChain(s: Seg, claim: (t: TileId) => void): void {
 const secs = ((Date.now() - t0) / 1000).toFixed(1);
 if (!siblingChecks) fail('never once saw a foot open beside a matchable sibling branch — the freeze rule went untested');
 if (!huntedRounds) fail('the double was dealt every single time — the cap on the hunt went untested');
+if (!hubRounds) fail('no chicken foot round was played at all — half the sweep went missing');
+if (!hubsFilled) fail('no chicken foot hub ever filled — the board never opened, so nothing past it was tested');
+if (ringsSeen.size !== HUBS.length) fail(`only rings ${[...ringsSeen]} were played — the house rule went untested`);
 console.log(`soak OK — ${games} games, ${rounds} rounds, ${moves} moves, ${blocked} blocked rounds, ${secs}s`);
 console.log(`  feet: ${feetOpened} opened, ${feetFilled} filled, ${forks} forked trains, ${siblingChecks} sibling-branch checks`);
 console.log(`  engine: ${huntedRounds} rounds hunted for it, longest ${longestHunt} times round the table (cap ${HUNT_ROUNDS[1]})`);
+console.log(`  hands: ${evenDeals} rounds opened dead level, ${shortLaps} one short on an emptied yard`);
+console.log(`  draws: ${soloDraws} in play, each one player's alone`);
+console.log(`  chicken foot: ${hubRounds} rounds, ${hubsFilled} hubs ringed all the way round, rings ${[...ringsSeen].sort().join('/')}`);

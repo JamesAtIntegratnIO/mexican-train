@@ -29,7 +29,10 @@ This is the fact that decides where a change goes.
 
 ```
 shared/protocol.ts   the wire contract — types only, checked by all three targets
+shared/phrasing.ts   how the rules are said in words, quoted by both ends
+server/dominoes.ts   the tile algebra: a tile, a set, a deal size
 server/game.ts       the rules. Pure, no I/O, no dependencies.
+server/variants.ts   the six places Mexican Train and Chicken Foot differ
 server/bots.ts       move selection and temperament
 server/room-core.ts  the table: lobby, membership, bot driver. Knows nothing
                      about sockets or timers.
@@ -61,11 +64,14 @@ stray `process.env` or `setTimeout` return type in `room-core.ts` fails
 
 | To change | Touch |
 | --- | --- |
-| A rule | `server/game.ts`, then the soak, then **both** rules texts (below) |
+| A rule both games share | `server/game.ts`, then the soak, then **both** rules texts (below) |
+| A rule only one game has | `server/variants.ts` — if you are adding an `if` to `game.ts` naming a game, it belongs there instead |
+| The words a rule is explained in | `shared/phrasing.ts`, which the rules card, the lobby and the server all quote |
+| A whole new game | `server/variants.ts`, a board painter beside `client/board.ts`, and one line in `client/boards.ts` |
 | A new client message | `shared/protocol.ts` → `server/dispatch.ts` → `room-core.ts` → the client |
 | Bot behaviour | `server/bots.ts` |
 | Lobby, seats, chat, membership | `server/room-core.ts` |
-| The board on screen | `client/lanes.ts` (a lane per train, a rail per branch) |
+| The board on screen | `client/rails.ts` for a branch; `client/lanes.ts` (Mexican Train) or `client/board.ts` (Chicken Foot) for the arrangement |
 | Node-only transport | `server/rooms.ts`, `sockets.ts`, `http.ts` |
 | Cloudflare-only transport | `worker/room.ts`, `worker/index.ts`, `wrangler.toml` |
 
@@ -89,6 +95,18 @@ stray `process.env` or `setTimeout` return type in `room-core.ts` fails
 - **A rule change has two more homes than you think:** the rules card in
   [client/modals.ts](client/modals.ts) and the Rules section of
   [README.md](README.md). The in-app panel has described the game wrongly before.
+  The wording itself lives in [shared/phrasing.ts](shared/phrasing.ts) so those
+  screens quote one sentence rather than each writing their own — the scoring
+  style was once explained three different ways in three different places.
+- **Anything that repaints the board goes through `client/boards.ts`.** Naming
+  `paintLanes` directly is how picking up a tile came to repaint a Chicken Foot
+  table as Mexican Train lanes: the hand knew a painter by name instead of
+  asking which one the table wanted.
+- **A variant is data, not a subclass.** `Game`'s constructor deals a round
+  before a subclass body would have run, so an override cannot read a field its
+  own class set. And the variant never reaches storage — structured clone
+  refuses functions — so `Game.toJSON` writes its name and `reviveGame` puts the
+  object back.
   The soak (`scripts/soak.ts`) is where a rule gets pinned so it can't regress —
   it fails if a run never exercises the pigeon-foot sibling case, so a green run
   can't be vacuous.

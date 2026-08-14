@@ -389,39 +389,73 @@ used only for throttling, never for authorisation.
 
 ## Rules
 
-The engine implements the official rules, plus the house rules this table plays
-by. Everything below the line is chosen by the host in the lobby.
+Two games share one engine. Everything below the line is chosen by the host in
+the lobby, starting with which of the two you are playing.
 
-**Always on**
+**Always on, in both games**
 
 - 13 rounds for a double-12 set, counting the engine down from 12 to blank.
 - Everything is dealt, engine included. Whoever holds the round's double lays it
-  and leads. If nobody was dealt it, players draw one tile each — keeping what
-  they draw — until it turns up, and the boneyard will not sit on it for longer
+  and leads. If nobody was dealt it, *everybody* draws one tile at the same time
+  — keeping what they draw — over and over until it turns up. Simultaneously and
+  not in turn: drawing round the table gives the lead seat more chances at the
+  double and leaves the table holding uneven hands before a tile has been
+  played. The boneyard will not sit on it for longer
   than three to six times round the table, drawn fresh each round. Buried deeper
   than that, the double is floated up into that window: at two players on a
   double-12 set it otherwise sits about thirty draws down, which is a quarter of
   an hour of taking turns to flip a tile over before anything happens. It is a
   ceiling and not a target — a double near the top is left where the shuffle put
   it, so a round can still open on the very first draw.
-- Your first tile must start your own train off the engine.
-- After that: one tile per turn, on your own train, the Mexican Train, or any
-  train whose marker is up.
 - One tile per turn — laying a double does not earn you a second play.
 - You draw only when nothing in your hand plays anywhere. If the drawn tile
   plays, you must play it.
-- The Mexican Train is communal and open from the start.
 - A round ends when someone plays their last tile, or everyone is blocked with an
   empty boneyard. Lowest total after the final round wins.
 - Anyone down to one tile is called out automatically — the digital version of
   tapping the table.
 
+**Mexican Train**
+
+- Your first tile must start your own train off the engine.
+- After that: one tile per turn, on your own train, the Mexican Train, or any
+  train whose marker is up.
+- The Mexican Train is communal and open from the start.
+
+**Chicken Foot**
+
+- The engine goes in the middle and wants **a ring of tiles around it** before
+  anything else can happen. Until it is ringed, the only legal play on the table
+  is another tile matching it, and those tiles become the board's live ends. Six
+  is the common rule and four is the short version; groups play both, so the
+  host picks. Six is also the ceiling: a ring is built from tiles bearing the
+  engine's own value and the smallest set offered has exactly six of them, so
+  asking for more would open a hub that could never fill.
+- After that: one tile per turn, on any open end. There are no trains of your
+  own and no markers — the board belongs to everybody, all the time.
+- Every double must be footed by three tiles, and because there is only one
+  board that freeze stops the whole table rather than one player's train.
+- Deals by the published double-9 table — 21 tiles at two players, 14 at three,
+  11, 8, 7, 6, and 5 at eight. It looks arbitrary because it is holding
+  something else steady: the yard keeps eleven to fifteen tiles whatever the
+  table size. That depth is the game rather than a detail, since a double stops
+  the board until three toes land and the yard is where a toe comes from when
+  nobody holds one. The other two sets have no published table and are dealt to
+  the same yard depth.
+- Rounds end blocked far more often than in Mexican Train — around a third of
+  them at four to six players, against almost never. That is the game, not a
+  fault: a blocked round still scores, and the tension of a board that might
+  seize up is most of the point. Mexican Train gives every player a train of
+  their own to escape onto; Chicken Foot deliberately does not.
+
 **Host options**
 
 | Setting | Choices |
 | --- | --- |
+| Game | Mexican Train · Chicken Foot |
 | Set | double-12 (13 rounds, up to 8 players), double-9, double-6 |
-| Doubles | cover once · 2 tiles + fork · 3 tiles + fork |
+| Ring | four · six (Chicken Foot only — tiles round the opening double) |
+| Doubles | cover once · 2 tiles + fork · 3 tiles + fork (Mexican Train only — Chicken Foot fixes it at 3) |
 | Scoring | house · official · just pips |
 
 *Doubles are never an obligation.* A double is simply the open end of its branch:
@@ -434,21 +468,28 @@ and **until every toe is down that whole train is frozen** — none of its branc
 can grow, not the toes already laid and not ones that forked off an earlier double.
 Once the foot fills, the branch forks into that many live ends.
 
-The freeze is per-train, not table-wide. Every other train carries on as normal,
-and you are never forced to feed a foot instead of playing somewhere else. Put your
-marker up and opponents get every one of your branches.
+In Mexican Train the freeze is per-train, not table-wide: every other train carries
+on as normal, and you are never forced to feed a foot instead of playing somewhere
+else. Put your marker up and opponents get every one of your branches. In Chicken
+Foot there is only one train, so the same per-train freeze *is* a whole-board
+freeze — which is the rule, and is why the two games share the mechanism rather
+than each having one.
 
 *Scoring.* House: blank halves are worth 0, but getting caught with the 0|0 costs
 50. Official: every blank half is 25, the 0|0 is 50. Just pips: straight dot
 count.
 
-*Markers are entirely manual* — raise or lower yours at any point in the round,
-whether or not it is your turn. Nothing lowers it for you, and playing a tile
-ends your turn on the spot, so a marker you only ever got to move on your own
-turn would have to stay up for a full lap of the table after the play that
-should have brought it down. It is your train and your risk, so it is yours to
-move whenever you like. (The one time it moves by itself is when you genuinely
-can't play: being blocked raises it, because that is what the marker is for.)
+*A marker is raised for you and lowered by you, and only once you have earned
+it.* Being unable to play raises it — that is what it is for — and it comes back
+down only after you have put a tile somewhere. A turn that ended in a draw and a
+shrug leaves your train open, because a marker you could take straight off again
+would cost nothing, and the cost is the point: the table gets a lap at your
+train.
+
+*When* it comes down is entirely yours, though, turn or no turn. Nothing lowers
+it automatically, and playing a tile ends your turn on the spot, so a marker you
+could only move on your own turn would have to stay up for a full lap after the
+play that should have brought it down.
 
 ## Notes
 

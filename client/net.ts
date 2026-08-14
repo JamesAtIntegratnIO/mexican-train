@@ -126,7 +126,7 @@ function announceDraw(m: DrewMessage): void {
   const t = m.tile.replace('-', ' | ');
   if (m.engine) { Snd.win(); return toast(`Drew ${t} — the engine! Lay it to start.`); }
   Snd.draw();
-  toast(m.seeking ? `Drew ${t} — not the engine`
+  toast(m.seeking ? `Everyone drew — you got ${t}`
     : m.playable ? `Drew ${t} — you can play it`
       : `Drew ${t} — no play, marker up, turn over`);
 }

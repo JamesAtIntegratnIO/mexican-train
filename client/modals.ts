@@ -5,29 +5,49 @@ import { $, esc, modalEl, openModal, closeModal } from './dom.js';
 import { S } from './state.js';
 import { avatar } from './tiles.js';
 import { send } from './net.js';
-import type { GameView, PlayerView, PlayerId } from '../shared/protocol.js';
+import { GAME_TITLE, SCORING_BLANKS, footRule, hubRule } from '../shared/phrasing.js';
+import type { Foot, GameView, Hub, PlayerView, PlayerId } from '../shared/protocol.js';
+
+/** What the card should describe. A table that has dealt knows for itself; one
+ *  still in the lobby has only the host's settings; a client with neither gets
+ *  the defaults rather than an empty card. */
+function tableRules(): Pick<GameView, 'game' | 'foot' | 'hub' | 'scoring'> {
+  const r = S.room;
+  if (r?.game) return r.game;
+  return { game: 'mexicanTrain', foot: 1, hub: 6, scoring: 'house', ...(r?.settings ?? {}) };
+}
 
 export function showRules(): void {
-  const g = S.room && S.room.game;
-  const foot = g ? g.foot : 1;
+  const { game, foot, hub, scoring } = tableRules();
+  const blanks = SCORING_BLANKS[scoring];
+  const body = game === 'chickenFoot' ? chickenFootRules(foot, hub) : mexicanTrainRules(foot);
   openModal(`<div class="card">
     <h2>How this table plays</h2>
-    <p class="sub">Set by the host before the deal.</p>
+    <p class="sub">${GAME_TITLE[game]} · set by the host before the deal.</p>
     <div class="rules-list">
-      <div><b>The goal</b>Shed all your tiles each round. You score the pips left in your hand${g && g.scoring !== 'pips' ? `, ${g.scoring === 'official' ? 'with blanks at 25 and the double blank at 50' : 'with the double blank costing 50'}` : ''}, and the <em>lowest</em> total after every round wins.</div>
-      <div><b>Starting a round</b>Everything is dealt, engine included. Whoever holds the round's double lays it and leads. If nobody was dealt it, players draw one tile each — keeping what they draw — until it turns up. The boneyard won't sit on it for longer than three to six times round the table: buried deeper than that, the double is floated up into that window, so a round never opens with a long stretch of everyone flipping a tile over. It's a ceiling, not a target — one near the top stays where the shuffle put it.</div>
-      <div><b>Your first turn</b>You must start your own train with a tile matching the engine. Can't? Draw one; if it still won't go, put your marker up and play moves on.</div>
-      <div><b>After that</b>One tile per turn, on your own train, the Mexican Train, or anyone's train whose marker is up.</div>
-      <div><b>Markers</b>Yours is entirely your call — raise or lower it at any point in the round, your turn or not, since playing a tile ends your turn before you could take it down. While it's up, <em>every branch</em> of your train is fair game for opponents.</div>
-      <div><b>Doubles</b>Never an obligation. A double is just the open end of its branch — match it to carry that branch on, or leave it and play somewhere else entirely. Doubles are laid crosswise.</div>${
-        foot > 1 ? `<div><b>Pigeon foot</b>A double takes <b>${foot} tiles</b>, and until all ${foot} are down <em>that whole train is frozen</em> — no branch of it grows, not the toes already laid and not branches that forked off earlier. Every other train carries on as normal, and you are never forced to feed a foot instead of playing elsewhere. Once it's full the branch forks into <b>${foot} live ends</b>.</div>` : ''}
-      <div><b>If you can't play</b>You only draw when you have no legal play anywhere at all. If the drawn tile plays, you must play it. Otherwise end your turn — and put your marker up so the table knows.</div>
-      <div><b>The Mexican Train</b>Communal, always open, started by whoever first plays a matching tile on it.</div>
+      <div><b>The goal</b>Shed all your tiles each round. You score the pips left in your hand — ${blanks} — and the <em>lowest</em> total after every round wins.</div>
+      <div><b>Starting a round</b>Everything is dealt, engine included. Whoever holds the round's double lays it and leads. If nobody was dealt it, <em>everybody</em> draws one tile at the same time — keeping what they draw — over and over until it turns up, so no seat gets more chances at it than another and the table starts level. The boneyard won't sit on it for longer than three to six times round the table: buried deeper than that, the double is floated up into that window, so a round never opens with a long stretch of everyone flipping a tile over. It's a ceiling, not a target — one near the top stays where the shuffle put it.</div>
+      ${body}
+      <div><b>If you can't play</b>You only draw when you have no legal play anywhere at all. If the drawn tile plays, you must play it. Otherwise your turn ends${game === 'chickenFoot' ? '' : ' — and your marker goes up so the table knows'}.</div>
       <div><b>Ending a round</b>Someone plays their last tile, or everyone is blocked with an empty boneyard. Going out on an uncovered double is allowed here.</div>
     </div>
     <div class="stack" style="margin-top:22px"><button class="btn primary" data-close>Got it</button></div>
   </div>`);
 }
+
+const mexicanTrainRules = (foot: Foot): string => `
+  <div><b>Your first turn</b>You must start your own train with a tile matching the engine. Can't? Draw one; if it still won't go, put your marker up and play moves on.</div>
+  <div><b>After that</b>One tile per turn, on your own train, the Mexican Train, or anyone's train whose marker is up.</div>
+  <div><b>Markers</b>Your marker goes up when you can't play, and it comes down again only once you <em>have</em> played — being stuck costs you a lap of the table at your train, which is the whole point of it. <em>When</em> it comes down is yours: any point in the round, your turn or not, since playing a tile ends your turn before you'd have had the chance. While it's up, <em>every branch</em> of your train is fair game for opponents.</div>
+  <div><b>Doubles</b>Never an obligation. A double is just the open end of its branch — match it to carry that branch on, or leave it and play somewhere else entirely. Doubles are laid crosswise.</div>${
+    foot > 1 ? `<div><b>Pigeon foot</b>${footRule(foot, 'mexicanTrain')} While it is frozen nothing else on that train grows — not the toes already laid, and not branches that forked off an earlier double. Every other train carries on as normal, and you are never forced to feed a foot instead of playing elsewhere.</div>` : ''}
+  <div><b>The Mexican Train</b>Communal, always open, started by whoever first plays a matching tile on it.</div>`;
+
+const chickenFootRules = (foot: Foot, hub: Hub): string => `
+  <div><b>The hub</b>${hubRule(hub)}</div>
+  <div><b>After that</b>One tile per turn, on any open end. There are no trains of your own and no markers: the board belongs to everybody, all the time.</div>
+  <div><b>Chicken foot</b>${footRule(foot, 'chickenFoot')} While it is owed, <em>nothing</em> on the board grows — not the toes already laid, and not branches that forked off an earlier double. You are still never obliged to feed it rather than draw.</div>
+  <div><b>Doubles</b>Never an obligation, but think before you lay one: it holds the whole table up, and if you can't cover it yourself you're waiting on somebody who can. Doubles are laid crosswise.</div>`;
 
 // What the host does with a seat nobody is sitting in. A bot is the reversible
 // answer — it stands in and gives the seat straight back — and a spectator is

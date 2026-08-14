@@ -5,14 +5,15 @@
 // in memory; a Durable Object uses alarms and rehydrates it from storage. Both
 // share this file, so the rules of the table can't drift between them.
 
-import { Game, Err, maxPlayersFor, handSize } from './game.js';
-import type { EnginePlayer, DrawResult } from './game.js';
+import { Game, Err, FOOTS, MAXES, SCORINGS, oneOf } from './game.js';
+import { DEFAULT_HUB, HUBS, VARIANTS, maxPlayersFor } from './variants.js';
+import type { EnginePlayer, DrawResult, SeekResult } from './game.js';
 import { chooseMove, botName, randomTemper } from './bots.js';
 import { log } from './log.js';
 import { metrics } from './metrics.js';
 import type { ClearedWhy, TableSample } from './metrics.js';
 import type {
-  PlayerId, Settings, RoomSnapshot, GameView, EngineGameView, ChatLine, ClientMessage,
+  PlayerId, Settings, RoomSnapshot, GameView, EngineGameView, ChatLine, ClientMessage, GameName,
 } from '../shared/protocol.js';
 
 /** A connection handle. The core never looks inside one — it only ever hands it
@@ -118,7 +119,16 @@ const wait = ([lo, hi]: readonly [number, number]): number => lo + Math.random()
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 // A Game is plain data plus methods, so it round-trips through JSON intact.
-const reviveGame = (data: unknown): Game | null => (data ? Object.assign(Object.create(Game.prototype), data) : null);
+// The stored blob carries the variant's name where the live game carries the
+// variant itself, so the object goes back on here. A table stored before there
+// was more than one game has no name at all, and Mexican Train is what it was.
+const reviveGame = (data: unknown): Game | null => {
+  if (!data) return null;
+  const g: Game = Object.assign(Object.create(Game.prototype), data);
+  g.variant = VARIANTS[(data as { game?: GameName }).game ?? 'mexicanTrain'] ?? VARIANTS.mexicanTrain;
+  g.hub = g.hub ?? DEFAULT_HUB;   // stored before the ring was the host's to pick
+  return g;
+};
 
 /** Running totals for the one telemetry line this table will ever produce.
  *
@@ -183,7 +193,7 @@ export class Room {
     this.players = [];       // {id, name, bot, temper, conn, connected, lastSeen}
     this.watchers = [];      // spectators — named, but they hold no tiles
     this.hostId = null;
-    this.settings = { max: 12, foot: 1, scoring: 'house' };
+    this.settings = { game: 'mexicanTrain', max: 12, foot: 1, hub: DEFAULT_HUB, scoring: 'house' };
     this.game = null;
     this.chat = [];
     this.stats = newStats();
@@ -196,7 +206,7 @@ export class Room {
     return {
       code: this.code, createdAt: this.createdAt, emptySince: this.emptySince,
       lastActivity: this.lastActivity, hostId: this.hostId, settings: this.settings,
-      chat: this.chat, game: this.game, stats: this.stats,
+      chat: this.chat, game: this.game ? this.game.toJSON() : null, stats: this.stats,
       players: this.players.map(strip), watchers: this.watchers.map(strip),
     };
   }
@@ -219,6 +229,10 @@ export class Room {
       adapter,
       game: reviveGame(data.game),
       stats: { ...r.stats, ...data.stats },
+      // Same reasoning as stats: a table stored before there was a game to
+      // choose has no `game` in its settings, and every lookup by it would
+      // come back undefined.
+      settings: { ...r.settings, ...data.settings },
       chatEnabled: r.chatEnabled,
     });
     return r;
@@ -355,10 +369,23 @@ export class Room {
   setSettings(byId: PlayerId, s: Partial<Settings>): void {
     this.requireHost(byId);
     if (this.game) throw new Err('The game has already started.');
-    if (s.max !== undefined && [6, 9, 12].includes(s.max)) this.settings.max = s.max;
-    if (s.foot !== undefined && [1, 2, 3].includes(s.foot)) this.settings.foot = s.foot;
-    if (s.scoring !== undefined && ['house', 'official', 'pips'].includes(s.scoring)) this.settings.scoring = s.scoring;
+    this.pickSettings(s);
+    // A game that fixes what a double demands overrides the picker, whichever
+    // order the two arrived in — otherwise the lobby shows a number the deal
+    // will not use.
+    this.settings.foot = VARIANTS[this.settings.game].foot ?? this.settings.foot;
     this.tick();
+  }
+
+  // A value that isn't on offer is ignored rather than refused: a client one
+  // deploy behind the server should not be able to fail a lobby.
+  pickSettings(s: Partial<Settings>): void {
+    const c = this.settings;
+    if (s.game !== undefined && s.game in VARIANTS) c.game = s.game;
+    c.max = oneOf(MAXES, s.max, c.max);
+    c.foot = oneOf(FOOTS, s.foot, c.foot);
+    c.hub = oneOf(HUBS, s.hub, c.hub);
+    c.scoring = oneOf(SCORINGS, s.scoring, c.scoring);
   }
 
   // ------------------------------------------------------------------ game flow
@@ -367,13 +394,15 @@ export class Room {
     this.requireHost(byId);
     if (this.game) throw new Err('The game has already started.');
     if (this.players.length < 2) throw new Err('You need at least 2 players.');
-    const seats = maxPlayersFor(this.settings.max);
+    const seats = maxPlayersFor(this.settings.game, this.settings.max);
     if (this.players.length > seats) {
       throw new Err(`A double-${this.settings.max} set only seats ${seats}. Pick a bigger set or drop a player.`);
     }
     this.game = new Game({
       players: this.players.map((p) => ({ id: p.id, name: p.name, bot: p.bot, temper: p.temper ?? randomTemper() })),
-      max: this.settings.max, foot: this.settings.foot, scoring: this.settings.scoring,
+      game: this.settings.game,
+      max: this.settings.max, foot: this.settings.foot, hub: this.settings.hub,
+      scoring: this.settings.scoring,
     });
     this.tick();
   }
@@ -393,10 +422,26 @@ export class Room {
     this.tick();
   }
 
+  // A draw during the hunt gives everyone a tile, so everyone is told what they
+  // got — a hand that silently grows by one while somebody else presses the
+  // button is the sort of thing players reload over. Handed out here rather
+  // than in the reply because a bot pressing it has no reply to ride on, and
+  // the humans at that table drew just the same.
+  //
+  // Returns nothing in that case: the caller's reply is for one player, and
+  // this was not a one-player event.
+  settleDraw(r: DrawResult | SeekResult | void): DrawResult | void {
+    if (!r || !('drawn' in r)) return r;
+    for (const { id, tile } of r.drawn) {
+      const seat = this.players.find((p) => p.id === id);
+      if (seat?.conn) this.adapter.send?.(seat.conn, { t: 'drew', tile, seeking: true, engine: r.found === id });
+    }
+  }
+
   act(id: PlayerId, msg: ClientMessage): DrawResult | void {
     if (!this.game) throw new Err('The game has not started.');
     if (msg.t === 'play') this.game.play(id, msg.tile, msg.train, msg.seg);
-    else if (msg.t === 'draw') { const r = this.game.draw(id); this.stats.moves++; this.tick(); return r; }
+    else if (msg.t === 'draw') { const r = this.game.draw(id); this.stats.moves++; this.tick(); return this.settleDraw(r); }
     else if (msg.t === 'pass') this.game.pass(id);
     else if (msg.t === 'marker') this.game.marker(id, msg.up);
     else if (msg.t === 'engine') this.game.layEngine(id);
@@ -506,16 +551,15 @@ export class Room {
 
   takeBotTurn(g: Game, seat: Seat): void {
     const mv = chooseMove(g, seat.id);
-    // Markers are manual, so bots have to work theirs deliberately — and only
-    // while it is still their turn, hence before the move lands.
-    if (g.phase === 'play') {
-      if (mv.type === 'pass') g.marker(seat.id, true);
-      else if (mv.type === 'play' && mv.train === seat.id) g.marker(seat.id, false);
-    }
     if (mv.type === 'engine') g.layEngine(seat.id);
     else if (mv.type === 'play') g.play(seat.id, mv.tile, mv.train, mv.seg);
-    else if (mv.type === 'draw') g.draw(seat.id);
+    else if (mv.type === 'draw') this.settleDraw(g.draw(seat.id));
     else g.pass(seat.id);
+    // Markers are manual, so a bot has to work its own. It can only come down
+    // once a tile has landed, so this happens after the move rather than before
+    // it — by which point the turn has passed on, which markers are allowed to
+    // outlast. Passing raises it without being asked.
+    if (mv.type === 'play' && g.variant.markers && g.status === 'playing') g.marker(seat.id, false);
     this.stats.moves++;              // a bot's turn is a turn like anyone's
   }
 
@@ -613,7 +657,11 @@ export class Room {
       code: this.code,
       youId: forId,
       hostId: this.hostId,
-      settings: { ...this.settings, seats: maxPlayersFor(this.settings.max), deal: handSize(Math.max(2, this.players.length), this.settings.max) },
+      settings: {
+        ...this.settings,
+        seats: maxPlayersFor(this.settings.game, this.settings.max),
+        deal: VARIANTS[this.settings.game].deal(Math.max(2, this.players.length), this.settings.max),
+      },
       phase: this.game ? 'game' : 'lobby',
       seats: this.players.map((p) => ({ id: p.id, name: p.name, bot: p.bot, connected: p.connected })),
       watchers: this.watchers.map((w) => ({ id: w.id, name: w.name, connected: w.connected })),
