@@ -162,6 +162,47 @@ describe('hibernation', () => {
     assert.equal(woken.room!.chat.filter((c) => !c.system).length, 1, 'a line landed after the flag went off');
   });
 
+  // A variant is behaviour, and behaviour does not survive storage — structured
+  // clone refuses an object with functions on it, so the game is stored by name
+  // and put back on the way in. Get that wrong and a Chicken Foot table wakes
+  // up either unable to write at all or holding a variant with no methods, and
+  // the next play throws rather than failing anywhere visible.
+  test('a chicken foot table wakes up still playing chicken foot', async () => {
+    const { ctx, host, doo } = await seatedHost();
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'settings', settings: { game: 'chickenFoot' } }));
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'addBot' }));
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'start' }));
+    assert.equal(doo.room!.game!.trains.length, 1, 'the table did not start as chicken foot');
+
+    const woken = new RoomDO(ctx, DEFAULT_ENV);
+    await settled();
+
+    const game = woken.room!.game!;
+    assert.equal(game.variant.name, 'chickenFoot', 'the variant did not survive eviction');
+    assert.equal(typeof game.variant.layTrains, 'function', 'the variant came back with no behaviour');
+    // The proof it is usable and not merely present: dealing a round runs
+    // straight through the variant that was just put back.
+    game.startRound();
+    assert.equal(game.trains.length, 1, 'a woken chicken foot table dealt itself trains');
+  });
+
+  // A table stored before there was a game to choose has no name in it at all.
+  test('a table stored without a game name comes back as mexican train', async () => {
+    const { ctx, host, doo } = await seatedHost();
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'addBot' }));
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'start' }));
+
+    const stored = doo.room!.toJSON() as Record<string, any>;
+    delete stored.settings.game;
+    delete (stored.game as Record<string, unknown>).game;
+    await ctx.storage.put('state', stored);
+
+    const woken = new RoomDO(ctx, DEFAULT_ENV);
+    await settled();
+    assert.equal(woken.room!.game!.variant.name, 'mexicanTrain');
+    assert.equal(woken.room!.settings.game, 'mexicanTrain');
+  });
+
   test('a woken table still answers its sockets', async () => {
     const { ctx, host } = await seatedHost();
     const woken = new RoomDO(ctx, DEFAULT_ENV);

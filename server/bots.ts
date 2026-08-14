@@ -1,7 +1,7 @@
 // Bot move selection. Deliberately heuristic rather than optimal — it should feel
 // like a decent human opponent, not an oracle.
 
-import { parse, isDouble } from './game.js';
+import { parse, isDouble } from './dominoes.js';
 import type { Game, EnginePlayer, Train, Seg, PendingFoot } from './game.js';
 import type { TileId, PlayerId, TrainId, Move } from '../shared/protocol.js';
 
@@ -27,6 +27,12 @@ interface Considered {
   cover: number;
   rival: EnginePlayer | null;
   aggro: number;
+  /** One communal board rather than a train each, so every play lands in front
+   *  of everybody and there is no such thing as a train of your own. */
+  board: boolean;
+  /** Somebody other than you is close enough to going out to be worth
+   *  inconveniencing. */
+  chase: boolean;
 }
 
 const NAMES = ['Bo', 'Cleo', 'Dax', 'Effie', 'Gus', 'Hattie', 'Ida', 'Jonah', 'Kit', 'Lupe', 'Mo', 'Nell', 'Otis', 'Pip', 'Ruby', 'Sable'];
@@ -107,18 +113,22 @@ function context(game: Game, me: EnginePlayer, mv: Move): Considered {
     rival: train.owner !== me.id && train.owner !== null ? game.player(train.owner)! : null,
     // Temperament, rescaled: -1 fully friendly .. +1 fully aggressive.
     aggro: ((me.temper ?? 0.5) - 0.5) * 2,
+    board: !game.variant.markers,
+    chase: game.players.some((p) => p.id !== me.id && p.hand.length <= 3),
   };
 }
 
 // Where to put it, ignoring who it hurts.
-function placement(me: EnginePlayer, { train, seg, outer }: Considered, ends: Ends): number {
+function placement(me: EnginePlayer, { train, seg, outer, board }: Considered, ends: Ends): number {
   const followUps = ends[outer] || 0;
   if (train.owner === me.id) {
     return 14                        // getting your marker down is worth a lot
       + followUps * 3.5              // ...and leaving an end you can follow up on
       + (seg.tiles.length ? 0 : 6);  // get started early
   }
-  if (train.owner === null) return 4;              // a safe dumping ground
+  // On one shared board every branch is yours as much as anyone's, so the only
+  // thing to weigh is whether the end it leaves is one you can use next turn.
+  if (train.owner === null) return board ? 4 + followUps * 2.6 : 4;
   return 7 - followUps * 1.2;        // better still — but don't hand them an end you wanted
 }
 
@@ -129,9 +139,40 @@ function doubleValue(game: Game, { dbl, cover }: Considered): number {
 }
 
 // Everything that only matters because somebody else is on the receiving end.
-// On your own train and on the Mexican train there is nobody to be nasty to.
-function spite(game: Game, { dbl, cover, foot, rival, aggro }: Considered): number {
-  if (!rival) return 0;
+// Which is a different question on a board nobody owns: there is no one train
+// to jam, but a double stops the whole table until its toes are down, so the
+// person it costs is whoever was closest to going out.
+function spite(game: Game, c: Considered): number {
+  if (c.board) return spiteOnBoard(c);
+  if (!c.rival) return 0;
+  return spiteOnRival(game, c, c.rival);
+}
+
+// On one shared board there is no such thing as jamming somebody else. A double
+// stops everybody, the player who laid it included, so whether to lay one is
+// mostly a question about your own hand and only slightly about temperament.
+//
+// Reading it the other way round — treating a double as an act of aggression a
+// friendly bot should avoid — is what made the obliging bots the dangerous
+// ones: they declined doubles until their hands were nothing but doubles, and
+// blocked 79% of rounds against the ruthless bots' 28%.
+function spiteOnBoard({ dbl, cover, foot, chase, aggro }: Considered): number {
+  let s = 0;
+  if (dbl) {
+    // A double you can follow up on is simply good play. One you cannot is a
+    // risk you are taking too; temperament decides how much you enjoy it, not
+    // whether it is a risk.
+    s += cover ? 6 : -10;
+    if (chase) s += aggro * 8;             // stalling somebody about to go out is the real spite
+  }
+  // Feeding a foot frees the board, your own next turn included. Aggressive
+  // bots dawdle over it; nobody refuses outright, because a board no one will
+  // thaw ends the round with every hand still full.
+  if (foot) s += 6 - aggro * 5;
+  return s;
+}
+
+function spiteOnRival(game: Game, { dbl, cover, foot, aggro }: Considered, rival: EnginePlayer): number {
   let s = 0;
   if (dbl) {
     // Dropping a double on an open train jams it — with pigeon feet it freezes

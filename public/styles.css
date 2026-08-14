@@ -376,6 +376,52 @@ a { color: var(--dim); }
 @keyframes pulse { 50% { box-shadow: 0 0 0 6px rgba(240,180,41,.09); } }
 .empty-hint { color: var(--dimmer); font-size: 12.5px; padding-left: 4px; font-style: italic; }
 
+/* ---------- chicken foot: one board, so no lane heads ----------
+   The seat strip carries what a lane head used to — who is on turn and who is
+   down to one tile — because with nobody owning a train it is the only place
+   left that says it. There is no hub header: the top bar already shows the
+   engine tile and the round. A card is a fork family: a branch off the hub and
+   the toes that grew off a double along it. */
+.seatstrip {
+  display: flex; align-items: center; gap: 7px; padding: 0 12px 11px; overflow-x: auto;
+  border-bottom: 1px solid var(--line-soft); margin-bottom: 12px; scrollbar-width: none;
+}
+.seatstrip::-webkit-scrollbar { display: none; }
+.seat {
+  display: flex; align-items: center; gap: 6px; padding: 5px 10px 5px 5px; border-radius: 22px;
+  border: 1px solid var(--line-soft); background: rgba(255,255,255,.02); flex: none;
+  transition: border-color .15s, background .15s;
+}
+.seat .nm { font-size: 12.5px; font-weight: 650; }
+.seat .ct { font-size: 11px; color: var(--dimmer); font-variant-numeric: tabular-nums; }
+.seat.me .nm { color: var(--gold); }
+.seat.onturn { border-color: var(--gold); background: var(--gold-soft); }
+.seat.away { opacity: .5; }
+.seat.lastone .ct {
+  color: #2a0b0b; background: var(--red); border-radius: 20px; padding: 0 6px; font-weight: 800;
+  animation: pulseRed 1.4s ease-in-out infinite;
+}
+
+.cards { display: grid; gap: 8px; padding: 0 12px; grid-template-columns: 1fr; }
+@media (min-width: 760px) { .cards { grid-template-columns: 1fr 1fr; } }
+@media (min-width: 1500px) { .cards { grid-template-columns: 1fr 1fr 1fr; } }
+.card-b {
+  border: 1px solid var(--line-soft); border-radius: 13px; padding: 7px;
+  background: rgba(255,255,255,.014); display: grid; gap: 3px; align-content: start;
+}
+.card-b .card-lbl {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+  color: var(--dimmer); padding: 2px 5px 0;
+}
+.card-b .rail { border: 0; background: none; padding: 5px; }
+.card-b .rail.live { border: 1px solid var(--gold); background: rgba(240,180,41,.07); box-shadow: none; }
+.card-b .rail.trail { border: 1px dashed var(--line); }
+/* a toe sits under the double it is filling, and reads as part of it */
+.card-b .rail[style*="--depth:1"], .card-b .rail[style*="--depth:2"] { margin-left: 14px; }
+.card-b.livecard { border-color: rgba(240,180,41,.45); background: rgba(240,180,41,.045); }
+.card-b.livecard .card-lbl { color: var(--gold); }
+.card-b.spent { opacity: .62; }
+
 /* ---------- dock ---------- */
 .dock {
   flex: none; border-top: 1px solid var(--line-soft); background: rgba(13,17,24,.92);

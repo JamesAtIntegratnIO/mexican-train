@@ -121,8 +121,10 @@ function drop(l: Lift, rail: HTMLElement | null): void {
     if (!S.sel) toast('That tile has nowhere to go.');
     return;
   }
-  const lane = rail.closest<HTMLElement>('.lane');
-  if (lane) playTile(l.tile, lane.dataset.train!, Number(rail.dataset.seg));
+  // Whichever board is on, the group a rail sits in names the train it belongs
+  // to — a lane in Mexican Train, a fork-family card in Chicken Foot.
+  const group = rail.closest<HTMLElement>('[data-train]');
+  if (group) playTile(l.tile, group.dataset.train!, Number(rail.dataset.seg));
 }
 
 // A held tile follows the board rather than sampling it: the lanes keep moving
@@ -143,15 +145,15 @@ function hover(l: Lift, rail: HTMLElement | null): void {
   orient(l.carried!, l.tile, rail ? Number(rail.dataset.end) : null);
 }
 
-/** The rail under the pointer — or, when the lane it is over has only one branch
- *  that will take the tile, that one. Aiming a fingertip at a strip of board is
- *  not the game. */
+/** The rail under the pointer — or, when the group it is over has only one
+ *  branch that will take the tile, that one. Aiming a fingertip at a strip of
+ *  board is not the game. */
 function railAt(x: number, y: number): HTMLElement | null {
   const el = document.elementFromPoint(x, y);
   if (!el) return null;
   const rail = el.closest<HTMLElement>('.rail.live');
   if (rail) return rail;
-  const live = el.closest('.lane')?.querySelectorAll<HTMLElement>('.rail.live');
+  const live = el.closest('[data-train]')?.querySelectorAll<HTMLElement>('.rail.live');
   return live && live.length === 1 ? live[0]! : null;
 }
 

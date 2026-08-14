@@ -1,19 +1,18 @@
-// The board: one lane per train, and inside each lane one rail per branch.
-//
-// Painting is incremental on purpose. Tiles are appended rather than rebuilt,
-// because throwing a branch away and redrawing it restarts its scroll position
-// and loses the entry animation on the tile that was just laid — which is the
-// one thing on screen the player is actually watching for.
+// The Mexican Train board: one lane per train, and inside each lane one rail
+// per branch. The rail itself — how a branch is drawn and kept up to date — is
+// rails.ts, which the Chicken Foot board is built out of too.
 
 import { $, cssEsc, esc } from './dom.js';
 import { S } from './state.js';
 import { Snd } from './sound.js';
-import { SEATC, laidHTML, markerHTML, avatar } from './tiles.js';
+import { SEATC, markerHTML, avatar } from './tiles.js';
 import { playTile } from './actions.js';
-import type { GameView, TrainView, SegView, FootView } from '../shared/protocol.js';
+import { orderSegs, paintRail, railShell } from './rails.js';
+import type { PlacedSeg } from './rails.js';
+import type { GameView, TrainView } from '../shared/protocol.js';
 
-/** A branch with its depth in the fork tree, so the rail can be indented. */
-type PlacedSeg = SegView & { depth: number };
+/** Every train here belongs to somebody, so this is what a freeze holds up. */
+const WHOLE = 'this train';
 
 // Yours first, then the communal train, then everyone else in seat order.
 function laneOrder(g: GameView): TrainView[] {
@@ -21,20 +20,6 @@ function laneOrder(g: GameView): TrainView[] {
   const mex = g.trains.find((t) => t.owner === null);
   const rest = g.trains.filter((t) => t !== mine && t !== mex);
   return [mine, mex, ...rest].filter((t): t is TrainView => Boolean(t));
-}
-
-// Branches are a tree; lay them out depth-first so children sit under their parent.
-function orderSegs(segs: SegView[]): PlacedSeg[] {
-  const kids = new Map<number | 'root', SegView[]>();
-  for (const s of segs) {
-    const k = s.parent === null ? 'root' : s.parent;
-    (kids.get(k) ?? kids.set(k, []).get(k)!).push(s);
-  }
-  const out: PlacedSeg[] = [];
-  (function walk(k: number | 'root', depth: number): void {
-    for (const s of kids.get(k) || []) { out.push({ ...s, depth }); walk(s.id, depth + 1); }
-  })('root', 0);
-  return out;
 }
 
 export function paintLanes(g: GameView): void {
@@ -96,7 +81,7 @@ function paintBranches(el: Element, train: TrainView, g: GameView, live: Set<str
   const structSig = segs.map((s) => s.id + '@' + s.depth).join(',');
   if (box.dataset.sig !== structSig) {
     box.dataset.sig = structSig;
-    box.innerHTML = segs.map((s) => railShell(s, train, g)).join('');
+    box.innerHTML = segs.map((s) => laneRail(s, train, g)).join('');
     for (const s of segs) delete S.laneN[train.id + ':' + s.id];
   }
 
@@ -107,63 +92,8 @@ function paintBranches(el: Element, train: TrainView, g: GameView, live: Set<str
   for (const s of segs) {
     const rail = box.querySelector<HTMLElement>(`[data-seg="${s.id}"]`);
     const key = train.id + ':' + s.id;
-    if (rail) paintRail(rail, s, key, live.has(key), frozen);
+    if (rail) paintRail(rail, s, key, live.has(key), frozen, WHOLE);
   }
-}
-
-function paintRail(rail: HTMLElement, s: PlacedSeg, key: string, isLive: boolean, frozen: FootView | null): void {
-  const tiles = rail.querySelector('.tiles')!;
-  appendTiles(tiles, rail, s, key);
-  rail.dataset.end = String(s.end);   // what a tile carried over this branch turns to face
-
-  const hint = rail.querySelector('.empty-hint') as HTMLElement | null;
-  if (hint) hint.style.display = s.tiles.length ? 'none' : '';
-
-  // the uncovered double itself
-  tiles.querySelectorAll('.tile.pend').forEach((n) => n.classList.remove('pend'));
-  if (s.foot && tiles.lastElementChild) tiles.lastElementChild.classList.add('pend');
-
-  rail.classList.toggle('live', isLive);
-  rail.classList.toggle('closed', !!s.closed);
-  // A forked branch can never be played on again — shrink it to a numeral-only
-  // trail so live ends get the space. Click it to open it back up.
-  rail.classList.toggle('trail', !!s.closed && !S.expanded.has(key));
-  rail.classList.toggle('frozen', !!frozen && !s.foot && !s.closed);
-
-  paintSlot(rail.querySelector('.slot') as HTMLElement, s, frozen);
-  if (isLive) requestAnimationFrame(() => rail.scrollIntoView({ block: 'nearest' }));
-}
-
-// Only the tiles that aren't drawn yet get drawn. A branch that somehow got
-// shorter — a round reset, a snapshot arriving out of order — is the one case
-// worth starting over for.
-function appendTiles(tiles: Element, rail: HTMLElement, s: PlacedSeg, key: string): void {
-  const had = S.laneN[key] || 0;
-  if (s.tiles.length < had) { tiles.innerHTML = ''; S.laneN[key] = 0; }
-  for (let i = S.laneN[key] || 0; i < s.tiles.length; i++) tiles.insertAdjacentHTML('beforeend', laidHTML(s.tiles[i]));
-  if (s.tiles.length !== had) {
-    S.laneN[key] = s.tiles.length;
-    requestAnimationFrame(() => { rail.scrollLeft = rail.scrollWidth; });
-  }
-}
-
-// The open end of a branch, and what it is waiting for.
-function paintSlot(slot: HTMLElement, s: PlacedSeg, frozen: FootView | null): void {
-  slot.hidden = !!s.closed;
-  if (s.closed) return;
-  slot.classList.toggle('foot', !!s.foot);
-  slot.innerHTML = `${s.end}${s.foot ? `<span class="need">${s.foot.placed}/${s.foot.need}</span>` : ''}`;
-  // A foot holds up the whole train, so the branches that aren't owed anything
-  // say why they are shut instead of posing as ordinary open ends.
-  slot.title = s.foot ? `${owedPhrase(s.foot)} to fill this foot — nothing else on this train moves until then`
-    : frozen ? `Frozen — this train owes ${owedPhrase(frozen)} before any branch grows`
-    : `Open end — needs a ${s.end}`;
-}
-
-// What an open foot is still owed, as a player would say it: "2 more 6s".
-function owedPhrase(f: FootView): string {
-  const owed = f.need - f.placed;
-  return `${owed} more ${f.value}${owed === 1 ? '' : 's'}`;
 }
 
 function laneShell(train: TrainView, g: GameView): string {
@@ -180,18 +110,10 @@ function laneShell(train: TrainView, g: GameView): string {
   </div>`;
 }
 
-function railShell(s: PlacedSeg, train: TrainView, g: GameView): string {
-  const mine = train.owner === S.pid;
-  const cap = s.parent === null
-    ? `<div class="hub-cap" title="engine">${g.engine}</div>`
-    : `<div class="branch-cap" title="branches off the double ${s.from}">${s.from}</div>`;
-  const hint = train.owner === null ? 'not started — anyone may open it' : mine ? 'start your train here' : 'not started';
-  return `<div class="rail" data-seg="${s.id}" style="--depth:${s.depth}">
-    ${cap}
-    <div class="tiles"></div>
-    <span class="empty-hint">${hint}</span>
-    <div class="slot"></div>
-  </div>`;
+function laneRail(s: PlacedSeg, train: TrainView, g: GameView): string {
+  const hint = train.owner === null ? 'not started — anyone may open it'
+    : train.owner === S.pid ? 'start your train here' : 'not started';
+  return railShell(s, g.engine, hint);
 }
 
 export function onLaneClick(e: Event): void {

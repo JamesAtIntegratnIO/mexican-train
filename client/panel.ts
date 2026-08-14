@@ -4,6 +4,7 @@ import { $, esc } from './dom.js';
 import { S } from './state.js';
 import { avatar } from './tiles.js';
 import { showScoreboard, handOver } from './modals.js';
+import { SCORING_BLANKS } from '../shared/phrasing.js';
 import type { RoomSnapshot, GameView, PlayerView, ChatLine } from '../shared/protocol.js';
 
 export function paintPanel(): void {
@@ -51,12 +52,10 @@ function noticesHTML(r: RoomSnapshot): string {
 
 function scoresHTML(r: RoomSnapshot, g: GameView): string {
   const ranked = [...g.players].sort((a, b) => a.score - b.score);
-  const blanks = g.scoring === 'house' ? ', and 50 for the double blank'
-    : g.scoring === 'official' ? ', with blanks at 25 and the 0|0 at 50' : '';
   return ranked.map((p) => scoreRow(p, g)).join('')
     + watchersHTML(r)
     + '<button class="btn sm" id="fullsb" style="width:100%;margin-top:14px">Full scoreboard</button>'
-    + `<p class="foot-note" style="text-align:left">Lowest total wins. You score the pips left in your hand at the end of each round${blanks}.</p>`;
+    + `<p class="foot-note" style="text-align:left">Lowest total wins. You score the pips left in your hand at the end of each round — ${SCORING_BLANKS[g.scoring]}.</p>`;
 }
 
 // `connected` rides on the player itself — the room stitches it in — so this

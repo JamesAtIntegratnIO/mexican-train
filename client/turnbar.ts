@@ -9,7 +9,7 @@ import { S } from './state.js';
 import { Snd } from './sound.js';
 import { send } from './net.js';
 import { showEndModal, handOver } from './modals.js';
-import type { GameView, TrainView } from '../shared/protocol.js';
+import type { GameView, TrainView, PlayerView } from '../shared/protocol.js';
 
 /** How the bar should look: a modifier class, the message, and any buttons. */
 interface BarState {
@@ -27,7 +27,14 @@ export function paintTurnbar(g: GameView): void {
   // Markers are fully manual, and not only on your turn — playing a tile ends
   // your turn, so a marker you meant to take down afterwards would otherwise
   // have to stay up until the table had been all the way round.
-  const marker = g.status === 'playing' && g.phase === 'play' && myTrain ? markerButton(myTrain) : '';
+  //
+  // A game without trains of its own has no marker to show. That falls out of
+  // there being no train owned by you, but it is said here on purpose: relying
+  // on the lookup coming back empty would leave the button one bug away from
+  // appearing in a game that has nothing for it to do.
+  const me = g.players.find((p) => p.id === S.pid);
+  const marker = hasMarkers(g) && g.status === 'playing' && g.phase === 'play' && myTrain && me
+    ? markerButton(myTrain, me) : '';
 
   bar.className = `turnbar ${cls}`;
   bar.innerHTML = `<div class="msg">${msg}</div>${S.arrange ? '' : marker + actions}`;
@@ -82,9 +89,11 @@ function yourPrompt(g: GameView): Omit<BarState, 'cls'> {
     };
   }
   if (g.prompt === 'seek') {
+    // Nobody's turn: the whole table draws together and keeps what it gets.
+    // The button is in front of one player only because somebody has to ask.
     return {
-      msg: `<span>No double ${g.engine} in your hand — draw until it turns up</span>`,
-      actions: '<button class="btn primary sm" data-act="draw">Draw a tile</button>',
+      msg: `<span>Nobody has the double ${g.engine} — everyone draws one</span>`,
+      actions: '<button class="btn primary sm" data-act="draw">Draw one each</button>',
     };
   }
   if (g.prompt === 'play') {
@@ -103,9 +112,13 @@ function yourPrompt(g: GameView): Omit<BarState, 'cls'> {
   }
   return {
     msg: '<span>Nothing playable and the boneyard is empty</span>',
-    actions: '<button class="btn primary sm" data-act="pass">End turn &amp; mark</button>',
+    actions: `<button class="btn primary sm" data-act="pass">End turn${hasMarkers(g) ? ' &amp; mark' : ''}</button>`,
   };
 }
+
+/** Whether this game has trains that belong to somebody, and so markers to
+ *  raise over them. */
+const hasMarkers = (g: GameView): boolean => g.game !== 'chickenFoot';
 
 function waitingFor(g: GameView): string {
   const who = g.players.find((p) => p.id === g.turn);
@@ -116,13 +129,23 @@ function waitingFor(g: GameView): string {
   if (who && !who.bot && !who.connected) {
     return `${lead}<span>Waiting for ${esc(who.name)} to come back…</span>`;
   }
-  const what = g.phase === 'seeking' ? `is drawing for the double ${g.engine}…` : 'is thinking…';
-  return `${lead}<span>${esc(who ? who.name : '…')} ${what}</span>`;
+  // The hunt is not a turn — everybody draws at once — so naming one player as
+  // the one doing it would be describing a game this isn't.
+  if (g.phase === 'seeking') return `${lead}<span>Drawing for the double ${g.engine}…</span>`;
+  return `${lead}<span>${esc(who ? who.name : '…')} is thinking…</span>`;
 }
 
-const markerButton = (t: TrainView): string =>
-  `<button class="btn sm marker-btn ${t.open ? 'up' : ''}" data-act="marker" data-up="${t.open ? 0 : 1}"
+// A marker only comes down once a tile has gone down, so while the player still
+// owes the table a play the control says so rather than offering something the
+// server is going to refuse.
+function markerButton(t: TrainView, me: PlayerView): string {
+  if (t.open && !me.playedSinceMark) {
+    return `<button class="btn sm marker-btn up" disabled
+       title="Your train stays open until you play a tile"><span class="pip"></span>Open till you play</button>`;
+  }
+  return `<button class="btn sm marker-btn ${t.open ? 'up' : ''}" data-act="marker" data-up="${t.open ? 0 : 1}"
      title="${t.open ? 'Close your train again' : 'Open your train to everyone'}"><span class="pip"></span>${t.open ? 'Marker down' : 'Marker up'}</button>`;
+}
 
 function onTurnbarClick(e: Event, g: GameView): void {
   const b = (e.target as Element).closest<HTMLElement>('[data-act]'); if (!b) return;
