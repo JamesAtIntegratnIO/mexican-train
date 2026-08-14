@@ -6,49 +6,29 @@ import type { Env, RateLimiterBinding } from './env.js';
 import { log, setLevel } from '../server/log.js';
 import { metrics, isFunnelEvent } from '../server/metrics.js';
 import { useAnalytics } from './analytics.js';
+import { HSTS, originAllowed as allowsOrigin, parseOrigins, policyHeaders } from '../shared/http-policy.js';
 
 export { RoomDO } from './room.js';
 
 const CODE_RE = /^[A-Z0-9]{3,8}$/;
 
-const securityHeaders = (isHtml: boolean): Record<string, string> => {
-  const h: Record<string, string> = {
-    'x-content-type-options': 'nosniff',
-    'referrer-policy': 'no-referrer',
-    'cross-origin-opener-policy': 'same-origin',
-    'strict-transport-security': 'max-age=31536000; includeSubDomains',
-  };
-  if (isHtml) {
-    h['x-frame-options'] = 'DENY';
-    h['content-security-policy'] = [
-      "default-src 'self'",
-      "script-src 'self'",
-      // Tile colours ride on inline style attributes, so this one has to stay.
-      "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data:",              // the favicon is an inline SVG data URI
-      "connect-src 'self' ws: wss:",
-      "font-src 'self'",
-      "base-uri 'none'",
-      "form-action 'none'",
-      "frame-ancestors 'none'",
-      "object-src 'none'",
-    ].join('; ');
-    h['permissions-policy'] = 'geolocation=(), camera=(), microphone=(), interest-cohort=()';
-  }
-  return h;
-};
+// The policy is stated once, in shared/http-policy, and this is the Worker's
+// half of it: nothing here reaches a player except over Cloudflare's TLS, so
+// HSTS is unconditional, where the Node build has to ask its proxy first.
+//
+// Exported, along with originAllowed below, for the contract test that holds
+// the two adapters against each other. Nothing else outside this file calls
+// either, and nothing in the type system would notice if they came apart.
+export const securityHeaders = (isHtml: boolean): Record<string, string> => ({
+  ...policyHeaders(isHtml),
+  'strict-transport-security': HSTS,
+});
 
-// Browsers always send Origin cross-site and on every WS upgrade, so this stops
-// other sites driving our tables. Forgeable by non-browsers, which is fine —
-// that was never the threat it defends against.
-function originAllowed(request: Request, env: Env): boolean {
-  const origin = request.headers.get('origin');
-  if (!origin) return true;                       // curl, tests, native clients
-  let host: string;
-  try { host = new URL(origin).host; } catch { return false; }
-  const allowed = (env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
-  if (allowed.length) return allowed.includes(host);
-  return host === new URL(request.url).host;      // same-origin default
+// The Worker's half of the origin check: the three strings it hands over come
+// off a `Request` and a binding rather than an `IncomingMessage` and
+// `process.env`, and that is the whole of what differs between the two hosts.
+export function originAllowed(request: Request, env: Env): boolean {
+  return allowsOrigin(request.headers.get('origin'), parseOrigins(env.ALLOWED_ORIGINS), new URL(request.url).host);
 }
 
 const json = (body: unknown, status = 200): Response =>

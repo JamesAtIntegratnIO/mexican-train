@@ -18,9 +18,10 @@ your friends. They open it on their own phones or laptops and play in real time.
 ## Deploying
 
 A table is a single piece of live state that several people mutate at once, so
-it needs one owner. There are two supported ways to give it one.
+it needs one owner. Durable Objects are how it gets one, and they are the only
+thing this ships to.
 
-### Cloudflare Workers + Durable Objects (recommended)
+### Cloudflare Workers + Durable Objects
 
 One Durable Object per table: a DO is a single addressable instance with its own
 storage, which is exactly the guarantee a room needs. Sockets use WebSocket
@@ -46,22 +47,24 @@ npm run tf:apply    # bundle, then deploy script + DO + hostname
 
 `npm run cf:dev` runs the whole thing locally, Durable Objects included.
 
-### A single Node host
+### The second host, which is not a deployment
 
-`Dockerfile` and `fly.toml` are included; Render, Railway and Koyeb build the
-same image unchanged.
+There is another host in this repo and it deploys nowhere. `npm run dev` and
+`npm start` run a Node process that holds every table in its own memory; it is
+the dev server, and it is what the suites drive over real HTTP and real
+WebSockets. Keeping it working is the point — the table logic can then be tested
+under plain `node --test` with no Workers runtime anywhere, and
+`worker/tsconfig.json` re-checking the shared files under Workers globals only
+means something because there is a second host to be independent *of*.
 
-```bash
-fly launch --copy-config --now
-```
+What it is not is somewhere to put the game. Tables live in one process's
+memory, so there could only ever be one of it: a second instance would hold
+different games and players would land on the wrong one. That is precisely the
+constraint a Durable Object removes, each table being its own object.
 
-> **Run exactly one instance.** On this path tables live in process memory, so a
-> second machine would hold different games and players could land on the wrong
-> one. `fly.toml` pins a single machine that suspends when the last player
-> disconnects. (The Cloudflare path has no such limit — each table is its own
-> object.)
-
-Just want friends on it for one evening? `npx localtunnel --port 3000`.
+Just want friends on it for one evening? `npx localtunnel --port 3000` puts the
+dev server in front of them, which is the one honest use of it — a tunnel and a
+table both stop existing when you shut the laptop.
 
 ### Serverless functions won't work
 
@@ -72,16 +75,40 @@ wouldn't exist in the next. Durable Objects are the exception: they're serverles
 
 ### Configuration
 
+Most of it is read by both hosts, from `[vars]` in `wrangler.toml` on the
+deployed one and from the environment on the other. Both get strings, so
+[shared/flags.ts](shared/flags.ts) does the parsing once rather than at each
+reader — otherwise `0` could quietly come to mean two different things on the
+two builds.
+
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `PORT` | `3000` | Listen port |
 | `ALLOWED_ORIGINS` | *(same-origin only)* | Comma-separated hosts allowed to call the API and open sockets. Only needed if the front end is served from a different host. |
 | `EMPTY_GRACE_MIN` | `15` | Minutes with nobody connected before an unstarted lobby is cleared |
 | `EMPTY_GRACE_GAME_MIN` | `720` | The same, for a table with a game in it |
 | `MAX_LIFETIME_HOURS` | `24` | Hours from creation before a table is cleared no matter what |
-| `MAX_ROOMS` | `500` | Hard cap on concurrent tables |
 | `CHAT_ENABLED` | `0` | Player-to-player chat. See [Chat](#chat) before turning it on. |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info` or `debug` |
+
+Three more are questions only a process has to answer, so they mean nothing on
+Workers: there is no port to bind, no registry above the Durable Objects to hold
+a count, and the client's address arrives on `cf-connecting-ip` with the edge
+vouching for it. Only the Node host reads these, which makes them a local and
+test concern now rather than a production one.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PORT` | `3000` | Listen port |
+| `MAX_ROOMS` | `500` | Hard cap on the tables one process will hold at once |
+| `TRUST_PROXY` | `0` | Whether to read the client IP out of `x-forwarded-for` at all |
+
+`TRUST_PROXY` is off because the safe default is the one that assumes nothing.
+With no proxy in front, anyone can send an `x-forwarded-for` of their choosing
+and so pick which rate-limit bucket their requests are charged to, which turns
+the throttle into a thing you opt out of; the socket's own address is then the
+only honest answer available. Turn it on when a reverse proxy genuinely stands
+in front of the process, and the hop that counts is the *last* one — the one the
+proxy appended — because everything before it came from the caller.
 
 One thing is not a variable and has to be edited: the `og:image` tag in
 [public/index.html](public/index.html) names its host in full, because a link
@@ -91,12 +118,13 @@ with somebody else's train.
 
 ### Logs
 
-One JSON object per line on stdout, which is what both hosts collect — Fly into
-its log stream, Workers into the tail that `[observability]` enables. Workers
-Logs bills per line, so the volume is kept deliberately low: **a table costs one
-line**, written when it is cleared, carrying how long it lived, how many people
-were ever at it, and whether a game was played and finished. Everything else at
-`info` is the process starting and stopping.
+One JSON object per line on stdout, which is all either host writes — on Workers
+that goes to the tail `[observability]` enables, and locally it is the terminal
+you started the dev server in. Workers Logs bills per line, so the volume is
+kept deliberately low: **a table costs one line**, written when it is cleared,
+carrying how long it lived, how many people were ever at it, and whether a game
+was played and finished. Everything else at `info` is the process starting and
+stopping.
 
 ```json
 {"ts":"…","level":"info","evt":"room_disposed","code":"B2UEJF","why":"empty",
@@ -148,10 +176,11 @@ Refusals are counted rather than logged. It is same-origin, so the app's own
 out. There is no third-party analytics here and adding one would mean opening
 that policy up.
 
-**On a single Node host**, everything counted since boot is at `GET /api/stats`
-— tables cleared and why, people who sat down, bots, games started and finished,
-rounds, moves, table-minutes, and the funnel above. In memory like everything
-else, so a restart is a reset.
+**On the Node host** — so, locally — everything counted since boot is at
+`GET /api/stats`: tables cleared and why, people who sat down, bots, games
+started and finished, rounds, moves, table-minutes, and the funnel above. In
+memory like everything else, so a restart is a reset. It is a way to watch what
+a soak or an evening of testing did, not a production dashboard.
 
 ```json
 {"ok":true,"uptime":88400,"rooms":3,
@@ -159,7 +188,7 @@ else, so a restart is a reset.
            "cleared.empty":95,"funnel.home":1204,"funnel.made":118}}
 ```
 
-**On Cloudflare** there is nowhere to keep a counter — a Worker has no memory
+**In production** there is nowhere to keep a counter — a Worker has no memory
 that outlives a request, and each table is its own Durable Object with no
 registry above it — so samples go to **Analytics Engine**, which is written to
 rather than logged and so is not billed by the line. It is on the free plan too:
@@ -356,12 +385,14 @@ Getting back in is a seat token in `localStorage`, so tables you still hold a
 seat at are listed on the front page — a game held overnight is no use if the
 link is buried in a group chat.
 
-On Cloudflare, holding a game costs essentially nothing: the Durable Object
-hibernates, the state is a few KB, and the alarm just fires later. On a single
-Node host it is resident memory, so `MAX_ROOMS` becomes the real constraint —
-when it's reached, the oldest empty lobby is dropped to make room. Abandoned
-*games* are never dropped for this: turning someone away beats deleting the
-evening they were coming back to.
+In production, holding a game costs essentially nothing: the Durable Object
+hibernates, the state is a few KB, and the alarm just fires later. The Node host
+keeps every table in resident memory instead, so there `MAX_ROOMS` is the real
+constraint — when it's reached, the oldest empty lobby is dropped to make room,
+and abandoned *games* are never dropped for this, because turning someone away
+beats deleting the evening they were coming back to. That used to be the
+constraint a deployment ran under; it is now a property of the dev server, and
+of the eviction the suites exercise.
 
 ## Security
 
@@ -379,13 +410,18 @@ What's in place:
 - **Security headers** including a CSP with no `unsafe-eval` and no external
   origins. `style-src` allows inline attributes because tile colours ride on
   them.
-- **A cap on concurrent tables**, so a script can't exhaust memory.
+- **A bound on how many tables can be minted.** In production that is the
+  throttle on creation, since each table is its own Durable Object and there is
+  no shared pool to exhaust; on the Node host, where they all sit in one
+  process, it is `MAX_ROOMS` as well.
 
 Worth knowing: there are no accounts. Anyone holding a table's link can join it
 or watch it, and seat identity is a random token in `localStorage`. That's
 deliberate for a game you share by pasting a link, but don't treat a table as
-private in any stronger sense. Client IPs come from `x-forwarded-for` and are
-used only for throttling, never for authorisation.
+private in any stronger sense. A client IP is used only for throttling and never
+for authorisation, and where it comes from depends on who is vouching for it: in
+production, `cf-connecting-ip` from the edge, and on the Node host the socket's
+own address unless `TRUST_PROXY` says a reverse proxy is in front.
 
 ## Rules
 
@@ -584,17 +620,18 @@ server/
   game.ts       rules engine — pure state and transitions, no I/O
   bots.ts       bot move selection and temperament
   room-core.ts  the table: lobby, membership, bot driver — knows nothing about
-                sockets or timers, and is shared by both deployment targets
+                sockets or timers, and is shared by both hosts
   dispatch.ts   what a client message means — shared, so the two can't drift
-  log.ts        structured logs, shared by both targets
+  log.ts        structured logs, shared by both hosts
   metrics.ts    usage counters and the sink each host plugs into
   rooms.ts      Node transport: in-memory registry, real sockets, setTimeout
-  index.ts      Node host: composes the two halves, owns the process
+  index.ts      Node host: composes the two halves, owns the process.
+                The dev server and what the suites drive; deployed nowhere
   http.ts         the JSON API and the static files
   sockets.ts      the upgrade gate and a socket's lifetime
   security.ts   rate limiting, origin checks, security headers
 worker/
-  index.ts      Cloudflare Worker: assets, /api, socket routing
+  index.ts      Cloudflare Worker: assets, /api, socket routing — what ships
   room.ts       the Durable Object — one per table, alarms + hibernation
   env.ts        the bindings, as declared in wrangler.toml
   analytics.ts  the Analytics Engine sink, and the column layout it writes
@@ -650,8 +687,10 @@ npm run soak -- 5 # more games per rule combination
 npm run check     # everything, plus a wrangler dry run over the Worker config
 ```
 
-The suites run against `dist/`, not the sources — the thing under test should be
-the thing that ships.
+The suites run against `dist/`, not the sources — compiled first, so what they
+drive is what the compiler accepted rather than the sources sitting beside it.
+Nearly all of what they cover is the half both hosts share, which is the half
+that ships.
 
 ## TypeScript
 
@@ -660,7 +699,7 @@ globals:
 
 | project | runtime | emits |
 |---|---|---|
-| `tsconfig.json` | Node | `dist/` — what the container runs |
+| `tsconfig.json` | Node | `dist/` — the dev server, and what the suites run against |
 | `client/tsconfig.json` | the browser | nothing; esbuild bundles it |
 | `worker/tsconfig.json` | Workers | nothing; wrangler bundles it |
 
@@ -724,10 +763,9 @@ last case, so a green run can't be vacuous.
 
 ### CI
 
-`ci.yml` runs on every pull request: tests, the soak, a `wrangler --dry-run` that
-validates the Worker bundle and its bindings without deploying, and a Docker
-build that boots the image and waits for `/api/health`. `deploy.yml` repeats the
-tests before shipping, because `main` can be pushed to directly.
+`ci.yml` runs on every pull request: tests, the soak, and a `wrangler --dry-run`
+that validates the Worker bundle and its bindings without deploying. `deploy.yml`
+repeats the tests before shipping, because `main` can be pushed to directly.
 
 ### If a deploy goes wrong
 
@@ -740,8 +778,8 @@ npx wrangler rollback [<version-id>]
 ```
 
 `/api/health` reports the deployed version id, so you can confirm which build is
-answering. On the Node host, redeploy the previous image — sessions are in memory
-and a restart clears every table either way.
+answering. A rollback takes the tables with it either way — sessions are in
+memory, and there is nothing to migrate.
 
 ---
 

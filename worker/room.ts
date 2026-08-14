@@ -55,6 +55,10 @@ export class RoomDO {
   /** When the bot clock is next due, or null when nothing is pending. Written
    *  to storage alongside the room, because the alarm has to survive eviction. */
   botAt!: number | null;
+  /** Whether the bot clock is actually in storage, as against merely being
+   *  null in memory. The two are not the same question, and only this one says
+   *  whether a delete would erase anything. */
+  botStored!: boolean;
 
   constructor(ctx: DurableObjectState, env: Env) {
     this.ctx = ctx;
@@ -102,7 +106,9 @@ export class RoomDO {
     this.room = data
       ? Room.revive(data, this.adapter(), this.opts)
       : null;
-    this.botAt = (await this.ctx.storage.get<number>(BOT_AT)) ?? null;
+    const at = await this.ctx.storage.get<number>(BOT_AT);
+    this.botAt = at ?? null;
+    this.botStored = at !== undefined;
     if (this.room) this.rebindConnections();
   }
 
@@ -124,8 +130,12 @@ export class RoomDO {
 
   async save(): Promise<void> {
     await this.ctx.storage.put(STATE_KEY, this.room!.toJSON());
-    if (this.botAt) await this.ctx.storage.put(BOT_AT, this.botAt);
-    else await this.ctx.storage.delete(BOT_AT);
+    // Only clear the bot clock when there is one to clear. A table with nobody
+    // waiting on a bot is the ordinary case — every human turn, and every table
+    // still in its lobby — and the unconditional delete spent a storage
+    // operation on a key that was never written, on every one of them.
+    if (this.botAt) { await this.ctx.storage.put(BOT_AT, this.botAt); this.botStored = true; }
+    else if (this.botStored) { await this.ctx.storage.delete(BOT_AT); this.botStored = false; }
     await this.setNextAlarm();
   }
 
@@ -144,6 +154,20 @@ export class RoomDO {
     if (why) {
       this.room.dispose(why);
       await this.ctx.storage.deleteAll();     // the table is gone for good
+      // Emptying storage does not evict the object, so the copy in memory has
+      // to go with it. Left set, it would keep the `!this.room` guards on /ws
+      // and webSocketMessage passing: a table the ceiling had just declared
+      // gone would take joins again, write itself back to storage, and be
+      // disposed a second time — two log lines and two data points for
+      // something meant to be sampled exactly once.
+      this.room = null;
+      this.botAt = null;
+      this.botStored = false;   // deleteAll() took the key with everything else
+      // deleteAll() clears a pending alarm only from compatibility date
+      // 2026-02-24 onwards, and this Worker is dated well before that, so the
+      // sweeper is unset by hand rather than left scheduled against storage
+      // that no longer exists.
+      await this.ctx.storage.deleteAlarm();
       return;
     }
     if (this.botAt && Date.now() >= this.botAt - 50) {
@@ -204,10 +228,10 @@ export class RoomDO {
       else if (!me) return this.reply(ws, { t: 'error', msg: 'Not joined.' });
       else mutated = this.onAction(ws, me, msg);
     } catch (e) {
-      // The save below is deliberately skipped: a half-applied change is left
-      // unsaved so the next wake rebuilds the table from the last good state
-      // rather than a broken one.
-      return this.messageFailed(ws, me, msg, e);
+      // The save below is skipped, so nothing this message half-applied reaches
+      // storage. Whether the table still in memory can be trusted afterwards is
+      // messageFailed's business, and it turns on what was thrown.
+      return await this.messageFailed(ws, me, msg, e);
     }
     if (mutated) await this.save();
   }
@@ -239,7 +263,19 @@ export class RoomDO {
     return mutated;   // a heartbeat must not cost a storage write per beat
   }
 
-  messageFailed(ws: WebSocket, me: Seat | Watcher | null | undefined, msg: ClientMessage, e: unknown): void {
+  // Two different things arrive here. An Err is the table saying no, and it is
+  // thrown before anything has been touched — every action in the engine and
+  // the room checks in full and only then mutates, which is what checkPlay is
+  // shaped to make obvious — so the room in memory still matches storage and
+  // nothing needs undoing. Anything else is a fault, and a fault may have got
+  // half way; skipping this message's write is not enough on its own, because
+  // the object is not evicted just because a message failed and the next
+  // message that does mutate would write the broken state out. So a fault is
+  // paid for with a reload, and a refusal is not: a refusal is ordinary — a
+  // client one tick behind naming a branch that has since forked is a routine
+  // no — and charging every one of them a storage read would be paying for
+  // damage that isn't there.
+  async messageFailed(ws: WebSocket, me: Seat | Watcher | null | undefined, msg: ClientMessage, e: unknown): Promise<void> {
     if (e instanceof Err) {
       // A refused join is terminal — the client has no way to carry on from it,
       // so end the socket rather than leave it sitting on a spinner.
@@ -254,7 +290,8 @@ export class RoomDO {
     // Keyed by the fault itself, so a client retrying into a bug costs one line
     // a minute rather than one per attempt.
     log.throttle('error', 'message_failed', { code: this.room!.code, pid: me?.id, t: msg.t, err: e }, `msg:${e instanceof Error ? e.message : String(e)}`);
-    return this.reply(ws, { t: 'error', msg: 'Something went wrong on the server.' });
+    this.reply(ws, { t: 'error', msg: 'Something went wrong on the server.' });
+    await this.load();   // back to the last good state, before anything can save
   }
 
   async webSocketClose(ws: WebSocket): Promise<void> { await this.dropped(ws); }

@@ -111,6 +111,130 @@ describe('how long a table is held', () => {
   });
 });
 
+// A connection is one member of the table, and closing it releases everything
+// it held. Two joins on one socket used to make two members, and releasing one
+// of them left the other sitting there `connected: true` with nobody on the end
+// of it — a person as far as this file's two rules can tell. So the bots played
+// the game out for everybody who had left, and the table was held to its ceiling
+// rather than the grace an abandoned game is given.
+describe('one connection, one member', () => {
+  test('a second join hands back the identity the connection already has', () => {
+    const room = new Room('TESTAB');
+    const conn: Conn = { who: 'ana' };
+    const first = room.join(conn, { name: 'Ana' });
+    const again = room.join(conn, { name: 'Ana' });
+
+    assert.equal(again.id, first.id, 'one socket was issued two identities');
+    assert.equal(room.players.length, 1, 'one socket took two seats');
+    assert.equal(room.stats.humans, 1, 'one person was counted as two');
+  });
+
+  test('closing it empties the table, however many times it joined', () => {
+    const room = new Room('TESTAB');
+    const conn: Conn = { who: 'ana' };
+    room.join(conn, { name: 'Ana' });
+    room.join(conn, { name: 'Ana' });
+    room.leave(conn);
+
+    assert.equal(room.players.length, 0, 'a seat outlived the socket that held it');
+    assert.equal(room.anyoneHere(), false, 'somebody is still at a table nobody is connected to');
+    assert.ok(room.emptySince, 'the grace period never started, so nothing would ever clear this table');
+    assert.equal(room.expiry(LIMITS, Date.now() + 16 * MIN), 'empty');
+  });
+
+  // Watching and then asking for a seat is the same socket asking to be two
+  // people. The way into a seat from the gallery is giveSeat(), which is the
+  // host's decision rather than the watcher's.
+  test('watching and then asking for a seat is not two people', () => {
+    const room = new Room('TESTAB');
+    const conn: Conn = { who: 'cara' };
+    const watching = room.join(conn, { name: 'Cara', spectate: true });
+    const again = room.join(conn, { name: 'Cara' });
+
+    assert.equal(again.id, watching.id);
+    assert.equal(room.players.length, 0, 'a watcher took a seat by asking twice');
+    assert.equal(room.watchers.length, 1);
+
+    room.leave(conn);
+    assert.equal(room.anyoneHere(), false, 'the table still thinks somebody is at it');
+    assert.ok(room.emptySince);
+  });
+
+  // The case that matters most, and the only one that reaches a game in play:
+  // takeSeat() refuses once a game exists, so a seat can only be doubled up in a
+  // lobby, but watchers arrive at any point. One stranded in the gallery is what
+  // kept the bots playing everybody's hands after they had all gone.
+  test('a spectator who joins twice mid-game does not keep the bots playing', () => {
+    const { room, ana, ben } = tableInPlay();
+    const cara: Conn = { who: 'cara' };
+    room.join(cara, { name: 'Cara', spectate: true });
+    room.join(cara, { name: 'Cara', spectate: true });
+    assert.equal(room.watchers.length, 1, 'one socket filled two places in the gallery');
+
+    const before = JSON.stringify(room.game!.trains);
+    room.leave(ana);
+    room.leave(ben);
+    room.leave(cara);
+    assert.equal(room.watchers.length, 0, 'somebody was left watching a table they had closed');
+    assert.equal(room.anyoneHere(), false);
+    assert.equal(room.pendingSeat(), null, 'the clock was still waiting on a seat');
+    assert.equal(room.runBot(), false, 'a bot played the game out for everybody who had left');
+    assert.equal(JSON.stringify(room.game!.trains), before, 'the board moved after everyone left');
+  });
+
+  // And the other half of the same stranded member: the table's clock. An
+  // abandoned game is held long enough to sleep on and no longer, which it can
+  // only be if leaving it starts the grace at all.
+  test('and does not hold the table past the grace an abandoned game gets', () => {
+    const { room, ana, ben } = tableInPlay();
+    const cara: Conn = { who: 'cara' };
+    room.join(cara, { name: 'Cara', spectate: true });
+    room.join(cara, { name: 'Cara', spectate: true });
+    room.leave(ana);
+    room.leave(ben);
+    room.leave(cara);
+
+    assert.ok(room.emptySince, 'the grace period never started');
+    assert.equal(room.expiry(LIMITS, Date.now() + 11 * HOUR), null);
+    assert.equal(room.expiry(LIMITS, Date.now() + 13 * HOUR), 'empty', 'the table was held to its ceiling instead');
+  });
+
+  // Belt and braces. join() is what keeps a connection to one member, but a
+  // socket closing is the last word on whether anybody is still here, so leave()
+  // releases everything that connection holds rather than the first thing it
+  // finds — whatever route a second member might arrive by later.
+  test('leave releases every member holding the connection', () => {
+    const room = new Room('TESTAB');
+    const conn: Conn = { who: 'ana' };
+    room.join(conn, { name: 'Ana' });
+    room.watchers.push({ id: 'ghost', name: 'Ghost', conn, connected: true, spectator: true });
+
+    room.leave(conn);
+    assert.equal(room.watchers.length, 0, 'a watcher outlived the socket that held it');
+    assert.equal(room.players.length, 0);
+    assert.equal(room.anyoneHere(), false);
+  });
+});
+
+// Somebody has to be able to start the next round. The seat of a player who
+// dropped mid-game stays at the table for them to come back to, so the fallback
+// is to a human who is merely away rather than to nobody at all.
+describe('who holds the controls', () => {
+  test('the host dropping mid-game hands them on', () => {
+    const { room, ana, hostId } = tableInPlay();
+    room.leave(ana);
+    assert.ok(room.hostId, 'the table was left with no host at all');
+    assert.notEqual(room.hostId, hostId, 'the controls stayed with a socket that had gone');
+  });
+
+  test('an abandoned game still has a host to come back to', () => {
+    const { room, ana, ben } = tableInPlay();
+    room.leave(ana);
+    room.leave(ben);
+    assert.ok(room.players.some((p) => p.id === room.hostId), 'the host is nobody at this table');
+  });
+});
+
 describe('the clock the bots run on', () => {
   test('it stops when the last person leaves', () => {
     const { room, spy, ana, ben } = tableInPlay();

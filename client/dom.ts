@@ -7,7 +7,12 @@ export const app = document.getElementById('app')!;
 export const modalEl = document.getElementById('modal')!;
 export const toastEl = document.getElementById('toasts')!;
 
-export const esc = (s: unknown): string => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
+// Everything this client builds is a template string dropped into innerHTML, so
+// this is the one thing standing between a name somebody typed and the markup
+// around it. The apostrophe is in the map because it costs nothing and takes a
+// standing assumption out of the pattern: without it, safety depends on every
+// attribute in every module staying double-quoted for ever.
+export const esc = (s: unknown): string => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
 // querySelector, narrowed. Nearly every call reads back markup this client
 // wrote a line earlier, so the element is guaranteed by construction. The few
 // places that genuinely may miss — a host-only button, the modal's advance

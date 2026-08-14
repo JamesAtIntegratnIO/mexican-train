@@ -60,14 +60,13 @@ export interface PendingFoot {
   placed: number;
 }
 
-/** What a draw hands back to the player who made it. `engine` is only ever set
- *  while the round's double is still being hunted; `ended` means the draw was
- *  unplayable, so the marker went up and the turn is over. */
+/** What a draw hands back to the player who made it. Only ordinary play produces
+ *  one: a draw during the hunt is everybody's, and hands back a `SeekResult`. An
+ *  unplayable tile ends the turn, but that is the marker's business rather than
+ *  the drawer's, so it is not said here. */
 export interface DrawResult {
   tile: TileId;
   playable?: boolean;
-  ended?: boolean;
-  engine?: boolean;
 }
 
 /** What one communal draw handed out. The hunt is not a turn — everybody
@@ -492,7 +491,7 @@ export class Game {
     if (!this.legalMoves(p).length) {
       // Nothing to decide here — the marker goes up and the turn is over.
       this.autoMark(p);
-      return { tile, playable: false, ended: true };
+      return { tile, playable: false };
     }
     return { tile, playable: true };
   }

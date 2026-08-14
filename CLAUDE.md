@@ -60,6 +60,12 @@ Everything else goes through `dispatch()`.
 stray `process.env` or `setTimeout` return type in `room-core.ts` fails
 `npm run types` rather than production.
 
+**Only the Worker is deployed.** The Node host is the dev server (`npm run dev`)
+and the target the suites drive over real HTTP and real sockets, which is the
+whole reason the table logic can be tested under plain `node --test` with no
+Workers runtime anywhere. It earns its keep by being a second host, so keep it
+working — but a question about production is a question about `worker/`.
+
 ## Where to change what
 
 | To change | Touch |
@@ -150,6 +156,6 @@ A shared link opens the table it names
 A pigeon foot freezes its whole train again
 ```
 
-Infrastructure commits take a `ci:`/`docker:` prefix. The PR template asks what
+Infrastructure commits take a `ci:` prefix. The PR template asks what
 changed and *how it was checked* — an unverified assumption stated plainly is
 worth more than a green tick that didn't cover it.

@@ -51,9 +51,11 @@ export function dispatch(room: Room, me: Seat | Watcher, msg: ClientMessage): Di
     case 'play': case 'draw': case 'pass': case 'marker': case 'engine': {
       const r = room.act(me.id, msg);
       // Only the drawer learns what came off the boneyard; everyone else just
-      // sees the count drop in the next snapshot.
+      // sees the count drop in the next snapshot. A draw during the hunt is not
+      // one player's event, so `act` hands back nothing and the tiles go out
+      // from `settleDraw` instead — this reply is only ever ordinary play.
       if (msg.t === 'draw' && r) {
-        return { reply: { t: 'drew', tile: r.tile, playable: r.playable, engine: r.engine, seeking: 'engine' in r }, mutated: true };
+        return { reply: { t: 'drew', tile: r.tile, playable: r.playable }, mutated: true };
       }
       break;
     }

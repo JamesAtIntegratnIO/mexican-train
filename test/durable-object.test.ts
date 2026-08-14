@@ -122,6 +122,69 @@ describe('storage writes', () => {
     assert.equal(host.last()?.t, 'error');
     assert.equal(counts.puts, before, 'a refusal should not be written to storage');
   });
+
+  // The bot clock is the exception to "every mutation is a write": most tables
+  // have no bot pending most of the time, and clearing a key that was never
+  // written costs an operation to erase nothing.
+  test('a table with no bot waiting does not keep clearing a clock it never set', async () => {
+    const { doo, host, counts } = await seatedHost();
+    const before = counts.deletes;
+    for (let i = 0; i < 5; i++) await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'name', name: `Ann ${i}` }));
+    assert.equal(counts.deletes, before, `5 saves with no bot pending cost ${counts.deletes - before} deletes`);
+  });
+
+  // ...and it still has to be cleared when there genuinely is one, or a stale
+  // clock survives hibernation and moves a seat nobody is waiting on.
+  test('a bot clock that was set is cleared once it is spent', async () => {
+    const { doo, host, store } = await seatedHost();
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'addBot' }));
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'start' }));
+    // Whoever was dealt the engine leads, so the bot holds the turn only by
+    // luck. Put it on turn by hand — the clock is what is under test, not the
+    // deal, and a test that passes on a shuffle is not a test.
+    const g = doo.room!.game!;
+    g.turn = g.players.findIndex((p) => p.bot);
+    doo.room!.tick();
+    await doo.save();
+    assert.ok(store.has('botAt'), 'the premise: a bot on turn sets the clock');
+
+    await doo.webSocketClose(asWS(host));      // last human leaves; the clock stops
+    assert.equal(store.has('botAt'), false, 'a spent bot clock was left in storage');
+  });
+});
+
+// Skipping the write for a failed message only keeps the table honest while the
+// table it half-changed is also gone, and the object is not evicted just
+// because a message failed. So a fault is answered with a reload and a refusal
+// is not — the two costs are different because the two risks are.
+describe('a message that goes wrong', () => {
+  test('an ordinary refusal is not paid for with a reload', async () => {
+    const { doo, host, counts } = await seatedHost();
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'addBot' }));
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'start' }));
+    const before = counts.gets;
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'start' }));    // already started
+    assert.equal(host.last()?.t, 'error');
+    assert.equal(counts.gets, before, 'a refusal read the table back out of storage');
+  });
+
+  test('a fault is rolled back rather than carried out by the next write', async () => {
+    const { doo, host, store } = await seatedHost();
+    // Nothing in the engine throws after it has mutated — that is exactly what
+    // makes a refusal safe to answer cheaply — so the dangerous shape has to be
+    // arranged by hand: a change applied, and then a fault.
+    const room = doo.room!;
+    const real = room.tick.bind(room);
+    let boom = true;
+    room.tick = () => { if (boom) { boom = false; throw new TypeError('mid-way fault'); } real(); };
+
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'addBot' }));
+    assert.equal(host.last()?.t, 'error');
+    assert.equal(doo.room!.players.length, 1, 'the half-seated bot is still in memory');
+
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'addBot' }));
+    assert.equal((store.get('room') as any).players.length, 2, 'the next action wrote the half-applied change out');
+  });
 });
 
 describe('hibernation', () => {
@@ -216,12 +279,13 @@ describe('hibernation', () => {
 // line — and cannot go in memory, because there isn't any that outlives a
 // request. It goes to Analytics Engine, so what matters here is that the points
 // are written at all, and that a deploy without the datasets still works.
+const dataset = (into: any[]) => ({ writeDataPoint: (p: any) => into.push(p) });
+function analyticsEnv() {
+  const tables: any[] = [], funnel: any[] = [];
+  return { tables, funnel, env: { ...DEFAULT_ENV, TABLES: dataset(tables), FUNNEL: dataset(funnel) } as unknown as Env };
+}
+
 describe('telemetry', () => {
-  const dataset = (into: any[]) => ({ writeDataPoint: (p: any) => into.push(p) });
-  function analyticsEnv() {
-    const tables: any[] = [], funnel: any[] = [];
-    return { tables, funnel, env: { ...DEFAULT_ENV, TABLES: dataset(tables), FUNNEL: dataset(funnel) } as unknown as Env };
-  }
   const post = (path: string, env: Env) => worker.fetch(new Request(`https://mexicantrain.example${path}`, { method: 'POST' }), env);
 
   test('a cleared table writes one point, with the people who were here', async () => {
@@ -265,6 +329,54 @@ describe('telemetry', () => {
     const { doo } = await seatedHost('NODATA');
     doo.room!.emptySince = Date.now() - 60 * 60_000;
     await assert.doesNotReject(() => doo.alarm());
+  });
+});
+
+// The 24-hour ceiling is the promise that nothing is kept, and on this host it
+// has to be kept twice over: emptying the storage does not evict the object, so
+// a table cleared by the alarm has to be dropped from memory in the same breath
+// or the guards that turn people away still see one.
+describe('a cleared table', () => {
+  async function clearedByCeiling() {
+    const { tables, env } = analyticsEnv();
+    const harness = fakeCtx();
+    const doo = new RoomDO(harness.ctx, env);
+    await settled();
+    await doo.fetch(new Request('https://do/create?code=TESTAB'));
+    const host = harness.connect();
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'join', name: 'Host' }));
+
+    doo.room!.createdAt = Date.now() - 25 * 3_600_000;    // past MAX_LIFETIME_HOURS
+    await doo.alarm();
+    return { doo, tables, ...harness };
+  }
+
+  test('it is gone from memory as well as from storage', async () => {
+    const { doo, store } = await clearedByCeiling();
+    assert.equal(doo.room, null, 'the object is still holding a table it disposed of');
+    // The alarm included: deleteAll() leaves it standing on a Worker dated
+    // before 2026-02-24, so it has to be unset by hand.
+    assert.deepEqual([...store.keys()], [], 'something outlived the table');
+  });
+
+  test('nobody can open a socket on it or join it', async () => {
+    const { doo, connect, store } = await clearedByCeiling();
+    assert.equal((await doo.fetch(new Request('https://do/ws'))).status, 404, 'a cleared table accepted a new socket');
+
+    const late = connect();
+    await doo.webSocketMessage(asWS(late), JSON.stringify({ t: 'join', name: 'Latecomer' }));
+    assert.equal(late.last()?.t, 'fatal');
+    assert.equal(late.find('you'), undefined, 'a cleared table seated somebody');
+    assert.deepEqual([...store.keys()], [], 'the table was written back to storage by a join it should have refused');
+  });
+
+  // The sample is the one row a table is ever worth, and it is written by
+  // dispose. A table that came back to life would file a second one for itself.
+  test('it is sampled exactly once, however often the alarm fires again', async () => {
+    const { doo, tables } = await clearedByCeiling();
+    await doo.alarm();
+    await doo.alarm();
+    assert.equal(tables.length, 1, `one table wrote ${tables.length} points`);
   });
 });
 
