@@ -3,7 +3,6 @@ node_modules/
 .env.*
 *.log
 .DS_Store
-.fly/
 .wrangler/
 .direnv/
 .env.local

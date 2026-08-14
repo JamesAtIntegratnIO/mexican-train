@@ -29,10 +29,3 @@ updates:
         patterns: ['*']
     commit-message:
       prefix: ci
-
-  - package-ecosystem: docker
-    directory: /
-    schedule:
-      interval: monthly
-    commit-message:
-      prefix: docker
