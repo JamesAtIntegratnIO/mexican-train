@@ -50,11 +50,6 @@ export function randomTemper(): number {
   return (Math.random() + Math.random() + Math.random()) / 3;
 }
 
-export function temperName(t: number): string {
-  return t < 0.2 ? 'obliging' : t < 0.4 ? 'good-natured' : t < 0.6 ? 'even-handed'
-    : t < 0.8 ? 'competitive' : 'ruthless';
-}
-
 // Returns {type:'play', tile, train} | {type:'draw'} | {type:'pass'}
 export function chooseMove(game: Game, playerId: PlayerId): BotMove {
   if (game.phase === 'seeking') {

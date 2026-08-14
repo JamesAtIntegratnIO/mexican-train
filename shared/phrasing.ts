@@ -69,6 +69,16 @@ export const hubNote = (hub: Hub): string => (hub === 4
 
 const WORD: Record<Hub, string> = { 4: 'four', 6: 'six' };
 
+/** What a bot's temperament reads as. The number is rolled once per bot by
+ *  `randomTemper` and stays secret until the game is over, so these five words
+ *  are the only form of it a player ever sees — which is why they live with the
+ *  wording rather than beside the roll. The bands have to keep step with what
+ *  that roll produces: it is pulled toward the middle, so most bots land in the
+ *  three names in the centre and the two at the ends stay rare. */
+export const temperName = (t: number): string =>
+  (t < 0.2 ? 'obliging' : t < 0.4 ? 'good-natured' : t < 0.6 ? 'even-handed'
+    : t < 0.8 ? 'competitive' : 'ruthless');
+
 /** What an open foot is still owed, as a player would say it: "2 more 6s".
  *  Structural on purpose, so the engine's `PendingFoot` and the wire's
  *  `FootView` can both be handed to it. */
