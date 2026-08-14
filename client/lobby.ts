@@ -23,7 +23,7 @@ export function renderLobby(): void {
   const url = `${location.origin}/g/${r.code}`;
   const me = r.seats.find((s) => s.id === S.pid);
 
-  app.innerHTML = `<div class="center"><div class="card wide">
+  paint(`<div class="center"><div class="card wide">
     ${LOGO}
     <p class="tagline">Send this link to your friends.</p>
 
@@ -45,9 +45,35 @@ export function renderLobby(): void {
       ${isHost ? hostControlsHTML(r) : waitingHTML(r)}
     </div>
     ${watchersHTML(r)}
-  </div></div>`;
+  </div></div>`);
 
   wireLobby(url);
+}
+
+// The lobby is drawn whole from every snapshot, so a host's own tap on a
+// setting comes back as a brand new page: a fresh scroller starting at the top,
+// with nothing focused. On a screen too short to hold the card that threw them
+// back up to the logo halfway through deciding, and made picking the second
+// setting a scroll back down. Carry both the offset and the keyboard's place
+// across the swap so a repaint leaves the page where the reader left it.
+function paint(html: string): void {
+  const was = $<HTMLElement>('.center', app);
+  const top = was ? was.scrollTop : 0;
+  const held = focusedSetting();
+  app.innerHTML = html;
+  const view = $<HTMLElement>('.center', app);
+  if (view) view.scrollTop = top;            // clamped for us if the card grew shorter
+  const again = held ? $<HTMLElement>(held, app) : null;
+  if (again) again.focus({ preventScroll: true });
+}
+
+// Which picker button the keyboard was on, if any. The replacement is an
+// identical button in the same place, so somebody stepping through the settings
+// without a mouse keeps their place rather than starting the page again.
+function focusedSetting(): string | null {
+  const el = document.activeElement as HTMLElement | null;
+  const set = el?.dataset.set, key = (el?.parentElement as HTMLElement | null)?.dataset.key;
+  return set && key ? `.seg[data-key="${key}"] [data-set="${set}"]` : null;
 }
 
 function seatHTML(s: SeatView, i: number, r: RoomSnapshot, isHost: boolean): string {
