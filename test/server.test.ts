@@ -324,3 +324,83 @@ describe('who a request is charged to', () => {
     }
   });
 });
+// One socket is one member of the table, whatever it asks for. A second `join`
+// used to hand the same connection a second identity, and closing it released
+// only one of them — leaving a member `connected: true` with nobody behind it,
+// which is a table that can never register as empty.
+describe('one socket is one player', () => {
+  let own: Awaited<ReturnType<typeof startServer>>;
+  before(async () => { own = await startServer(); });
+  after(async () => { await own?.stop(); });
+
+  const mint = async (): Promise<string> =>
+    ((await fetch(`${own.base}/api/new`, { method: 'POST' }).then((r) => r.json())) as any).code;
+  const seats = async (code: string): Promise<number> =>
+    ((await fetch(`${own.base}/api/room/${code}`).then((r) => r.json())) as any).players;
+  const lastRoom = (ws: any): any => ws.seen.filter((m: any) => m.t === 'room').pop();
+
+  test('a socket that joins twice is still one player', async () => {
+    const code = await mint();
+    const ws = openSocket(own.port, code);
+    await ws.opened;
+    ws.say({ t: 'join', name: 'Ana' });
+    await ws.expect('you');
+    ws.say({ t: 'join', name: 'Ana' });
+    await sleep(200);
+
+    const ids = ws.seen.filter((m: any) => m.t === 'you').map((m: any) => m.pid);
+    assert.equal(ids.length, 2, 'the second join was never answered');
+    assert.equal(ids[0], ids[1], 'one socket was issued two identities');
+    assert.equal(await seats(code), 1, 'one socket took two seats');
+
+    ws.close();
+    await sleep(250);
+    assert.equal(await seats(code), 0, 'closing the only socket left a player at the table');
+  });
+
+  test('a watcher who then asks for a seat is still one member', async () => {
+    const code = await mint();
+    const ws = openSocket(own.port, code);
+    await ws.opened;
+    ws.say({ t: 'join', name: 'Nosy', spectate: true });
+    await ws.expect('you');
+    ws.say({ t: 'join', name: 'Nosy' });
+    await sleep(200);
+
+    const room = lastRoom(ws);
+    assert.equal(room.seats.length, 0, 'one socket was watching and playing at once');
+    assert.equal(room.watchers.length, 1);
+
+    ws.close();
+    await sleep(250);
+    assert.equal(await seats(code), 0, 'a seat outlived the socket that held it');
+  });
+
+  // The mid-game case: a seat can only be doubled up in a lobby, but watchers
+  // arrive at any point, and one stranded in the gallery is what keeps the bots
+  // playing a game everybody has closed.
+  test('a spectator who joins twice leaves nobody watching', async () => {
+    const code = await mint();
+    const host = openSocket(own.port, code);
+    await host.opened;
+    host.say({ t: 'join', name: 'Host' });
+    await host.expect('you');
+    host.say({ t: 'addBot' });
+    await sleep(150);
+    host.say({ t: 'start' });
+    await sleep(250);
+
+    const gallery = openSocket(own.port, code);
+    await gallery.opened;
+    gallery.say({ t: 'join', name: 'Cara', spectate: true });
+    await gallery.expect('you');
+    gallery.say({ t: 'join', name: 'Cara', spectate: true });
+    await sleep(200);
+    assert.equal(lastRoom(host).watchers.length, 1, 'one socket filled two places in the gallery');
+
+    gallery.close();
+    await sleep(300);
+    assert.equal(lastRoom(host).watchers.length, 0, 'somebody was left watching a table they had closed');
+    host.close();
+  });
+});

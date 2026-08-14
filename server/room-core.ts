@@ -31,7 +31,6 @@ export interface Seat {
   temper?: number;
   conn: Conn | null;
   connected: boolean;
-  lastSeen?: number;
 }
 
 export interface Watcher {
@@ -190,7 +189,7 @@ export class Room {
     this.createdAt = Date.now();
     this.emptySince = Date.now();
     this.lastActivity = Date.now();
-    this.players = [];       // {id, name, bot, temper, conn, connected, lastSeen}
+    this.players = [];       // {id, name, bot, temper, conn, connected}
     this.watchers = [];      // spectators — named, but they hold no tiles
     this.hostId = null;
     this.settings = { game: 'mexicanTrain', max: 12, foot: 1, hub: DEFAULT_HUB, scoring: 'house' };
@@ -240,7 +239,33 @@ export class Room {
 
   // ------------------------------------------------------------------ membership
 
+  /** Who this connection already is, if it is anybody. A departed seat keeps a
+   *  null `conn` and a bot never had one, so a null connection matches nothing
+   *  — asking with one would otherwise hand back the first player who left. */
+  memberOn(conn: Conn): Seat | Watcher | undefined {
+    if (conn === null || conn === undefined) return undefined;
+    return this.players.find((x) => x.conn === conn) || this.watchers.find((x) => x.conn === conn);
+  }
+
+  // One connection is one member. A second `join` on a connection that already
+  // has an identity is answered with the identity it holds rather than issued
+  // another, because the alternative is a socket holding two members and
+  // `leave` releasing one of them: the other is stranded `connected: true` with
+  // nobody on the end of it, for ever.
+  //
+  // That is not a cosmetic count. A member like that is a person as far as
+  // `anyoneHere()` can tell, so the clock keeps running and the bots play an
+  // abandoned game out for everybody who left it — the one thing at this table
+  // nobody can undo. And `emptySince` never being set means the table is held
+  // to its ceiling rather than the grace an abandoned game is given, which is
+  // storage and alarms spent on a table nobody is at.
+  //
+  // Nothing legitimate is refused by this. A reload arrives on a new socket, so
+  // it reconnects rather than repeats; moving from the gallery into a seat is
+  // giveSeat()'s job, and changing a name is rename()'s.
   join(conn: Conn, { pid, name, spectate }: { pid?: PlayerId | null; name?: string; spectate?: boolean }): Seat | Watcher {
+    const held = this.memberOn(conn);
+    if (held) return held;
     if (spectate) return this.watch(conn, { pid, name });
     const seat = pid && this.players.find((x) => x.id === pid);
     const p = seat ? this.reclaimSeat(seat, conn, name) : this.takeSeat(conn, name);
@@ -270,7 +295,7 @@ export class Room {
   takeSeat(conn: Conn, name?: string): Seat {
     if (this.game) throw new Err('That game is already under way.');
     if (this.players.length >= MAX_PLAYERS) throw new Err('This table is full (8 players).');
-    const p = { id: rid(), name: clean(name, `Player ${this.players.length + 1}`), bot: false, conn, connected: true, lastSeen: Date.now() };
+    const p = { id: rid(), name: clean(name, `Player ${this.players.length + 1}`), bot: false, conn, connected: true };
     this.players.push(p);
     this.stats.humans++;               // a seat taken, not a seat currently held
     this.say(`${p.name} joined.`);
@@ -308,24 +333,33 @@ export class Room {
     return this.players.some((x) => x.connected && !x.bot) || this.watchers.some((x) => x.connected);
   }
 
+  // Everything this connection held goes, not merely the first thing found.
+  // join() sees to it there is only ever one, but a socket closing is the last
+  // word on whether anybody is still here, and it must not be able to leave a
+  // member behind whatever route put one there — a stranded member is a table
+  // that never registers as empty.
   leave(conn: Conn): void {
-    const w = this.watchers.find((x) => x.conn === conn);
-    if (w) {
-      this.watchers = this.watchers.filter((x) => x !== w);
-      this.say(`${w.name} stopped watching.`);
-      if (!this.anyoneHere()) this.emptySince = Date.now();
-      return this.tick();
-    }
-    const p = this.players.find((x) => x.conn === conn);
-    if (!p) return;
-    p.conn = null; p.connected = false; p.lastSeen = Date.now();
+    if (!this.memberOn(conn)) return;   // and a null conn is nobody: every departed seat has one
+    for (const w of this.watchers.filter((x) => x.conn === conn)) this.dropWatcher(w);
+    for (const p of this.players.filter((x) => x.conn === conn)) this.dropSeat(p);
+    if (!this.anyoneHere()) this.emptySince = Date.now();
+    this.tick();
+  }
+
+  dropWatcher(w: Watcher): void {
+    this.watchers = this.watchers.filter((x) => x !== w);
+    this.say(`${w.name} stopped watching.`);
+  }
+
+  // A seat in a lobby is given up; a seat in a game is held open for its player
+  // to come back to, which is what the whole grace period exists for.
+  dropSeat(p: Seat): void {
+    p.conn = null; p.connected = false;
     if (!this.game) {
       this.players = this.players.filter((x) => x !== p);
       this.say(`${p.name} left.`);
     }
     if (this.hostId === p.id) this.reassignHost();
-    if (!this.anyoneHere()) this.emptySince = Date.now();
-    this.tick();
   }
 
   reassignHost(): void {
@@ -486,7 +520,11 @@ export class Room {
     this.watchers = this.watchers.filter((x) => x !== w);
     if (this.game) this.reseatInGame(p.id, w);
     p.id = w.id; p.name = w.name; p.bot = false; delete p.temper;
-    p.conn = w.conn; p.connected = true; p.lastSeen = Date.now();
+    p.conn = w.conn; p.connected = true;
+    // A person sat down in a seat, which is the one thing `humans` counts. It
+    // is a column in a row that can never be corrected once written, and this
+    // route into a seat used to go by uncounted.
+    this.stats.humans++;
     // The socket was watching a second ago and its own idea of who it is has to
     // change with the seat, or its next message arrives as a spectator's.
     this.adapter.identify?.(w.conn, p.id);
