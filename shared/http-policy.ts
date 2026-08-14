@@ -55,7 +55,7 @@ export function policyHeaders(isHtml: boolean): Record<string, string> {
 }
 
 /** The allow-list as both hosts receive it: one comma-separated string of
- *  hosts, e.g. "mexicantrain.fly.dev,train.example.com". Empty means nobody was
+ *  hosts, e.g. "mexicantrain.example.com,train.example.org". Empty means nobody was
  *  named, which is not the same as naming nobody — see below. */
 export const parseOrigins = (value: string | undefined): string[] =>
   (value || '').split(',').map((s) => s.trim()).filter(Boolean);
