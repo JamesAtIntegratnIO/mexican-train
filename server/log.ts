@@ -1,8 +1,9 @@
 // Structured logs — one JSON object per line.
 //
-// Both hosts capture stdout and nothing else: Fly ships it to its log stream,
-// Workers to the tail enabled by [observability] in wrangler.toml. So a log
-// line is the only forensic trail either build leaves behind, which is why
+// Both hosts write to stdout and nothing else: Workers ships it to the tail
+// enabled by [observability] in wrangler.toml, and on Node it is the terminal
+// you started it in. So a log line is the only forensic trail either build
+// leaves behind, which is why
 // every one of them carries the table code — without it you get a stack trace
 // and no way to tell which game it came from.
 //

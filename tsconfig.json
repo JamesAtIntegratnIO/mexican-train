@@ -1,6 +1,6 @@
 // The Node project: the server, its tests, and the soak. This is the only
-// project that emits — `dist/` is what the container runs and what the tests
-// exercise, so the thing under test stays the thing that ships.
+// project that emits — `dist/` is what the tests exercise and what `npm start`
+// runs, so the tests drive the compiled tree rather than the sources beside it.
 {
   "extends": "./tsconfig.base.json",
   "compilerOptions": {

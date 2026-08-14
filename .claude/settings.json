@@ -34,8 +34,7 @@
       "Bash(wrangler deploy:*)",
       "Bash(npx wrangler deploy:*)",
       "Bash(npx wrangler rollback:*)",
-      "Bash(terraform apply:*)",
-      "Bash(fly deploy:*)"
+      "Bash(terraform apply:*)"
     ]
   }
 }
