@@ -122,6 +122,35 @@ describe('storage writes', () => {
     assert.equal(host.last()?.t, 'error');
     assert.equal(counts.puts, before, 'a refusal should not be written to storage');
   });
+
+  // The bot clock is the exception to "every mutation is a write": most tables
+  // have no bot pending most of the time, and clearing a key that was never
+  // written costs an operation to erase nothing.
+  test('a table with no bot waiting does not keep clearing a clock it never set', async () => {
+    const { doo, host, counts } = await seatedHost();
+    const before = counts.deletes;
+    for (let i = 0; i < 5; i++) await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'name', name: `Ann ${i}` }));
+    assert.equal(counts.deletes, before, `5 saves with no bot pending cost ${counts.deletes - before} deletes`);
+  });
+
+  // ...and it still has to be cleared when there genuinely is one, or a stale
+  // clock survives hibernation and moves a seat nobody is waiting on.
+  test('a bot clock that was set is cleared once it is spent', async () => {
+    const { doo, host, store } = await seatedHost();
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'addBot' }));
+    await doo.webSocketMessage(asWS(host), JSON.stringify({ t: 'start' }));
+    // Whoever was dealt the engine leads, so the bot holds the turn only by
+    // luck. Put it on turn by hand — the clock is what is under test, not the
+    // deal, and a test that passes on a shuffle is not a test.
+    const g = doo.room!.game!;
+    g.turn = g.players.findIndex((p) => p.bot);
+    doo.room!.tick();
+    await doo.save();
+    assert.ok(store.has('botAt'), 'the premise: a bot on turn sets the clock');
+
+    await doo.webSocketClose(asWS(host));      // last human leaves; the clock stops
+    assert.equal(store.has('botAt'), false, 'a spent bot clock was left in storage');
+  });
 });
 
 // Skipping the write for a failed message only keeps the table honest while the

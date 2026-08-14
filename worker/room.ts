@@ -55,6 +55,10 @@ export class RoomDO {
   /** When the bot clock is next due, or null when nothing is pending. Written
    *  to storage alongside the room, because the alarm has to survive eviction. */
   botAt!: number | null;
+  /** Whether the bot clock is actually in storage, as against merely being
+   *  null in memory. The two are not the same question, and only this one says
+   *  whether a delete would erase anything. */
+  botStored!: boolean;
 
   constructor(ctx: DurableObjectState, env: Env) {
     this.ctx = ctx;
@@ -102,7 +106,9 @@ export class RoomDO {
     this.room = data
       ? Room.revive(data, this.adapter(), this.opts)
       : null;
-    this.botAt = (await this.ctx.storage.get<number>(BOT_AT)) ?? null;
+    const at = await this.ctx.storage.get<number>(BOT_AT);
+    this.botAt = at ?? null;
+    this.botStored = at !== undefined;
     if (this.room) this.rebindConnections();
   }
 
@@ -124,8 +130,12 @@ export class RoomDO {
 
   async save(): Promise<void> {
     await this.ctx.storage.put(STATE_KEY, this.room!.toJSON());
-    if (this.botAt) await this.ctx.storage.put(BOT_AT, this.botAt);
-    else await this.ctx.storage.delete(BOT_AT);
+    // Only clear the bot clock when there is one to clear. A table with nobody
+    // waiting on a bot is the ordinary case — every human turn, and every table
+    // still in its lobby — and the unconditional delete spent a storage
+    // operation on a key that was never written, on every one of them.
+    if (this.botAt) { await this.ctx.storage.put(BOT_AT, this.botAt); this.botStored = true; }
+    else if (this.botStored) { await this.ctx.storage.delete(BOT_AT); this.botStored = false; }
     await this.setNextAlarm();
   }
 
@@ -152,6 +162,7 @@ export class RoomDO {
       // something meant to be sampled exactly once.
       this.room = null;
       this.botAt = null;
+      this.botStored = false;   // deleteAll() took the key with everything else
       // deleteAll() clears a pending alarm only from compatibility date
       // 2026-02-24 onwards, and this Worker is dated well before that, so the
       // sweeper is unset by hand rather than left scheduled against storage

@@ -87,15 +87,15 @@ export const BOT_DELAY: readonly [number, number] = [700, 1500];
 
 // Rejection sampling off crypto bytes — no modulo bias, and not guessable the
 // way Math.random() codes were. Web Crypto so it runs unchanged on Workers.
-export function newCode(len: number = CODE_LEN): string {
+export function newCode(): string {
   const out = [];
   const limit = 256 - (256 % CODE_ALPHABET.length);
-  while (out.length < len) {
-    const bytes = crypto.getRandomValues(new Uint8Array(len * 2));
+  while (out.length < CODE_LEN) {
+    const bytes = crypto.getRandomValues(new Uint8Array(CODE_LEN * 2));
     for (const byte of bytes) {
       if (byte >= limit) continue;                       // drop the biased tail
       out.push(CODE_ALPHABET[byte % CODE_ALPHABET.length]);
-      if (out.length === len) break;
+      if (out.length === CODE_LEN) break;
     }
   }
   return out.join('');

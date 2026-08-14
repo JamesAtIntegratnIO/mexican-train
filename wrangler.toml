@@ -26,7 +26,7 @@ CHAT_ENABLED = "0"
 # error | warn | info | debug. debug logs a line per join, so keep it off here.
 LOG_LEVEL = "info"
 # Only needed if the app is served from a different host than the Worker.
-# ALLOWED_ORIGINS = "mexicantrain.integratn.io"
+# ALLOWED_ORIGINS = "mexicantrain.integratn.tech"
 
 # Minting a table costs a Durable Object, so it is throttled per IP: 5 a minute,
 # matching the Node build's limiter. `period` only accepts 10 or 60.
